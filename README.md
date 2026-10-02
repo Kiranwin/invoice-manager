@@ -2,7 +2,7 @@
   <img src="https://img.shields.io/badge/Python-3.12+-blue.svg" alt="Python 3.12+">
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License">
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg" alt="Platform">
-  <img src="https://img.shields.io/badge/Version-3.3.1-brightgreen.svg" alt="v3.3.1">
+  <img src="https://img.shields.io/badge/Version-3.3.2-brightgreen.svg" alt="v3.3.2">
 </p>
 
 <h1 align="center">发票夹子 🧾</h1>
@@ -36,7 +36,7 @@
 
 ```bash
 # 从 Wheel 包安装
-pip install dist/invoice_manager-3.3.0-py3-none-any.whl
+pip install dist/invoice_manager-3.3.2-py3-none-any.whl
 ```
 
 ### 启动 Web UI
@@ -79,12 +79,97 @@ uv run python invoice_clipper/__main__.py export --from 2025-03 --format both
 
 ---
 
+## 🤖 MCP AI Agent 接口
+
+本项目内置 MCP (Model Context Protocol) Server，将发票管理能力暴露为 AI Agent 可调用的工具，
+兼容 Claude Desktop、Cursor、Trae 等支持 MCP 协议的客户端。
+
+### 启动方式
+
+MCP Server 有两种运行形态，按需选择：
+
+**1. 随 Web UI 一起启动（推荐，默认 HTTP 模式）**
+
+```bash
+uv run python -m invoice_clipper.__run__
+# MCP 接口挂载在 http://127.0.0.1:8000/mcp
+```
+
+Web UI 与 MCP 共享同一进程，配置和数据库自动初始化。
+
+**2. 独立运行 MCP Server**
+
+```bash
+# 默认 HTTP（Streamable HTTP），监听 http://127.0.0.1:8100/mcp
+uv run python -m invoice_clipper.mcp_server
+
+# 指定传输模式：http | sse | stdio
+uv run python -m invoice_clipper.mcp_server --transport stdio
+```
+
+传输模式由 `config.yaml` 的 `mcp.transport` 决定，可用 `--transport` 参数覆盖：
+
+```yaml
+mcp:
+  transport: http   # http (Streamable HTTP, 默认) | sse | stdio
+```
+
+### 客户端接入示例
+
+**Claude Desktop / Cursor / Trae 等（stdio 模式）**
+
+在客户端的 MCP 配置中加入：
+
+```json
+{
+  "mcpServers": {
+    "invoice-manager": {
+      "command": "uv",
+      "args": ["run", "--directory", "<项目路径>", "python", "-m", "invoice_clipper.mcp_server", "--transport", "stdio"]
+    }
+  }
+}
+```
+
+**HTTP 模式接入**
+
+启动 Web UI 或独立 MCP Server 后，在客户端填入 URL：
+`http://127.0.0.1:8000/mcp`（随 Web UI）或 `http://127.0.0.1:8100/mcp`（独立运行）。
+
+### 可用工具
+
+MCP Server 暴露以下工具，覆盖发票管理全流程：
+
+| 分类 | 工具 | 说明 |
+|------|------|------|
+| 📥 扫描处理 | `scan_invoices` | 扫描监控目录，批量识别新发票并入库 |
+| 📥 扫描处理 | `process_file` | 处理单个发票文件（PDF/OFD/图片），返回识别结果 |
+| 📋 查询 | `list_invoices` | 列出全部发票，支持关键词搜索与状态筛选 |
+| 📋 查询 | `query_invoices_tool` | 多条件查询（日期/卖家/买家/项目/归属人） |
+| 📋 查询 | `get_invoice` | 获取单张发票完整信息（含附件） |
+| 📋 查询 | `get_invoice_stats` | 统计：总数、可报销数、总金额、可报销金额 |
+| ✏️ 编辑 | `update_invoice_tool` | 更新发票字段（项目/归属人/备注/金额等，按需传入） |
+| ✏️ 编辑 | `exclude_invoice` | 标记发票为「不报销」 |
+| ✏️ 编辑 | `include_invoice` | 恢复发票为「可报销」 |
+| 🗑️ 删除 | `delete_invoice_tool` | 删除发票及其附件文件（不可恢复） |
+| 🏷️ 标签 | `list_tags` / `create_tag` / `delete_tag_tool` | 标签的增删查 |
+| 🏷️ 标签 | `get_invoice_tags_tool` / `set_invoice_tags_tool` | 查询/设置发票的标签 |
+| 📂 归属 | `list_projects` / `create_project` / `delete_project_tool` | 归属项目的增删查 |
+| 📂 归属 | `list_persons` / `create_person` / `delete_person_tool` | 归属人的增删查 |
+| 📤 导出 | `export_invoices_excel` | 按条件导出 Excel，返回文件路径 |
+| 📤 导出 | `export_invoices_pdf` | 按条件导出合并 PDF，返回文件路径 |
+
+所有工具返回 JSON 字符串，含 `success` / `error` / `warning` 字段表示执行结果。
+查询、统计、导出类工具返回的数据结构与 Web UI 一致，可参考「Web UI 页面」章节。
+
+---
+
 ## 📦 安装方式
 
 ### Wheel 包（推荐）
 
 ```bash
-pip install dist/invoice_manager-3.3.1-py3-none-any.whl
+pip install dist/invoice_manager-3.3.2-py3-none-any.whl
 ```
 
 安装后可用命令：
@@ -165,7 +250,7 @@ invoice-manager/
 │   ├── __init__.py               # load_config + 所有模块导出
 │   ├── __main__.py               # pip 入口点
 │   ├── __run__.py                # 进程锁启动入口（支持 --debug）
-│   ├── web.py                    # FastAPI Web UI (v3.3.1)
+│   ├── web.py                    # FastAPI Web UI (v3.3.2)
 │   ├── mcp_server.py             # MCP AI Agent 接口
 │   ├── database.py               # 数据库调度层
 │   ├── db_backends.py            # SQLite + PostgreSQL 后端
@@ -193,7 +278,7 @@ invoice-manager/
 │       ├── baidu_ocr.py          # 百度 OCR
 │       └── llm_vision.py         # 大模型视觉
 └── dist/
-    └── invoice_manager-3.3.1-py3-none-any.whl
+    └── invoice_manager-3.3.2-py3-none-any.whl
 ```
 
 ---
@@ -219,12 +304,13 @@ invoice-manager/
 
 ---
 
-## 🎯 v3.3.1 新增功能
+## 🎯 v3.3.2 新增功能
 
 | 功能 | 说明 |
 |------|------|
-| 🐛 **批量状态修复** | 批量标记排除/恢复正常接口修复 |
-| ♾️ **凑票张数不限** | `max_count=0` 表示不限制张数 |
+| 🤖 **MCP 文档完善** | 补充 MCP AI Agent 接口完整文档（启动方式、客户端接入、18 个工具清单） |
+| ✅ **导出标记已报销** | 导出时可勾选「标记为已报销」，已报销发票不再参与下次凑票 |
+| 🐛 **凑票下载 404 修复** | 修复智能凑票导出源文件 ZIP 返回 404 的问题 |
 
 ---
 

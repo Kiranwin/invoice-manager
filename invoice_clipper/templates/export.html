@@ -58,6 +58,15 @@
       <div class="export-mode-hint">源文件打包：保留原始 PDF/图片文件，打包为 ZIP</div>
     </div>
 
+    <!-- Post-export action -->
+    <div style="margin-top: 12px;">
+      <div class="form-group checkbox">
+        <input type="checkbox" name="mark_reported" value="1" id="exp_mark_reported">
+        <label for="exp_mark_reported">导出后标记为已报销</label>
+      </div>
+      <div class="export-mode-hint">勾选后，导出的发票将标记为「已报销」状态，不再参与下次凑票与导出</div>
+    </div>
+
     <div class="btn-group" style="margin-top: 20px;">
       <button type="submit" class="btn btn-primary">开始导出</button>
     </div>
@@ -69,6 +78,9 @@
   <h3>导出完成</h3>
   {% if invoice_count is not none %}
   <div class="summary">共导出 <strong>{{ invoice_count }}</strong> 张发票，可报销合计 <strong>¥{{ "%.2f" | format(total_amount) }}</strong></div>
+  {% endif %}
+  {% if marked_count %}
+  <div class="summary" style="color: #166534;">已标记 <strong>{{ marked_count }}</strong> 张发票为「已报销」，不再参与下次凑票</div>
   {% endif %}
   <div class="btn-group" style="margin-top: 12px;">
     {% for dl in download_links %}

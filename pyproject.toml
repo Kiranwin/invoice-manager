@@ -1,6 +1,6 @@
 [project]
 name = "invoice-manager"
-version = "3.3.1"
+version = "3.3.2"
 description = "智能发票管理工具 — 自动识别、归档、导出报销单"
 readme = "README.md"
 requires-python = ">=3.12"

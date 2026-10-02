@@ -705,6 +705,13 @@ async def post_export(request: Request):
     except Exception as e:
         return flash_redirect("/export", f"导出失败: {e}", "error")
 
+    # 导出后标记为已报销（复用 excluded 字段：已报销的发票不再参与下次凑票与导出）
+    marked_count = 0
+    if form.get("mark_reported"):
+        for inv in invoices:
+            update_invoice_status(inv["id"], excluded=True)
+            marked_count += 1
+
     ctx = get_flash(request)
     ctx.update({
         "page": "export",
@@ -714,6 +721,7 @@ async def post_export(request: Request):
         "total_amount": total_amount,
         "selected_ids": selected_ids_str,
         "selected_invoices": invoices if selected_ids_str else [],
+        "marked_count": marked_count,
     })
     return templates.TemplateResponse(request, "export.html", ctx)
 
