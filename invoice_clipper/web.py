@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""发票夹子 Web UI — FastAPI + Jinja2 (v3.3.1)"""
+"""发票夹子 Web UI — FastAPI + Jinja2 (v3.3.2)"""
 import re
 import json
 import shutil
@@ -50,7 +50,7 @@ async def _lifespan(app: FastAPI):
         yield  # 应用运行中
 
 
-app = FastAPI(title="发票夹子", version="3.3.1", lifespan=_lifespan)
+app = FastAPI(title="发票夹子", version="3.3.2", lifespan=_lifespan)
 app.mount("/static", StaticFiles(directory=str(PKG_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(PKG_DIR / "templates"))
 
@@ -815,7 +815,7 @@ def main():
     port = int(cfg.get("server", {}).get("port", 8000))
 
     url = f"http://{host}:{port}"
-    print(f"发票夹子 v3.3.1 正在启动 ...")
+    print(f"发票夹子 v3.3.2 正在启动 ...")
     print(f"   配置文件: {cfg_path}")
     print(f"   本地地址: {url}")
 
