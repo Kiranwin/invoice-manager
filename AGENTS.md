@@ -162,8 +162,108 @@ git push origin main
 
 ---
 
+## 5. 版本发布流程
+
+当需要发布新版本（如 3.3.2 → 3.3.3）时，按以下步骤执行。
+
+### 5.1 全局版本号更新
+
+版本号散落在多处，**必须全部更新**，漏改会导致前端/构建显示旧版本：
+
+```bash
+# 先搜索当前版本号，确认所有引用点
+grep -rn "3\.3\.2" invoice_clipper/ pyproject.toml README.md
+```
+
+需更新的文件清单：
+
+| 文件 | 位置 | 示例 |
+|------|------|------|
+| `pyproject.toml` | `[project].version` | `version = "3.3.3"` |
+| `invoice_clipper/__init__.py` | 模块 docstring | `发票夹子核心模块 - v3.3.3` |
+| `invoice_clipper/__run__.py` | 启动入口 docstring | `启动入口（v3.3.3）` |
+| `invoice_clipper/web.py` | 文件 docstring | `FastAPI + Jinja2 (v3.3.3)` |
+| `invoice_clipper/web.py` | `FastAPI(version=...)` | `version="3.3.3"` |
+| `invoice_clipper/web.py` | 启动打印 | `发票夹子 v3.3.3 正在启动` |
+| `invoice_clipper/config.example.yaml` | 文件头注释 | `发票夹子 v3.3.3 · 配置文件模板` |
+| `invoice_clipper/templates/base.html` | 导航栏版本号 | `v3.3.3` |
+| `README.md` | badge | `Version-3.3.3` |
+| `README.md` | pip install 命令（2 处） | `invoice_manager-3.3.3-py3-none-any.whl` |
+| `README.md` | 项目结构 web.py 注释 | `FastAPI Web UI (v3.3.3)` |
+| `README.md` | 项目结构 dist 文件名 | `invoice_manager-3.3.3-...whl` |
+| `README.md` | 版本更新日志章节标题 | `v3.3.3 新增功能` |
+
+更新后再次 grep 确认无遗漏：
+```bash
+grep -rn "3\.3\.2" invoice_clipper/ pyproject.toml README.md  # 应无输出
+```
+
+### 5.2 打包
+
+```bash
+uv build
+# 确认产物
+ls dist/
+# → invoice_manager-<新版本>-py3-none-any.whl
+# → invoice_manager-<新版本>.tar.gz
+```
+
+### 5.3 提交并打 Tag
+
+```bash
+git add -A  # 版本号更新涉及多文件，可全量暂存
+git commit -m "release v<新版本>: <简述变更>"
+git tag v<新版本>
+git push origin main
+git push origin v<新版本>
+```
+
+### 5.4 创建 GitHub Release
+
+使用 gh CLI（路径 `C:\Program Files\GitHub CLI\gh.exe`，需 `gh auth login` 认证）：
+
+```powershell
+$env:Path = "C:\Program Files\GitHub CLI;" + $env:Path
+
+# 准备 Release Notes（无 BOM UTF-8）
+$notes = @'
+## v<新版本> 更新内容
+
+### 新功能1
+描述...
+
+### 新功能2
+描述...
+'@
+[System.IO.File]::WriteAllText("$PWD\release_notes.md", $notes, [System.Text.UTF8Encoding]::new($false))
+
+# 创建 Release 并上传 wheel + sdist
+gh release create v<新版本> --title "v<新版本>" --notes-file release_notes.md `
+    "dist\invoice_manager-<新版本>-py3-none-any.whl" `
+    "dist\invoice_manager-<新版本>.tar.gz"
+
+Remove-Item release_notes.md
+```
+
+若需更新已有 Release 的资产（如补提交后重新构建）：
+```powershell
+uv build
+gh release upload v<新版本> "dist\invoice_manager-<新版本>-py3-none-any.whl" "dist\invoice_manager-<新版本>.tar.gz" --clobber
+```
+
+### 5.5 远程仓库迁移
+
+如需更换远程地址：
+```bash
+git remote set-url origin https://github.com/<user>/<repo>.git
+git remote -v  # 确认
+```
+
+---
+
 ## 快速检查清单
 
+### Bug 修复
 - [ ] 已复现 bug 并定位根因
 - [ ] 修改最小化，未夹带无关改动
 - [ ] 已用脚本/浏览器验证修复生效、无回归
@@ -172,3 +272,11 @@ git push origin main
 - [ ] 行尾无 CRLF 噪声
 - [ ] commit message 清晰说明问题与修复
 - [ ] `git push origin main` 成功
+
+### 版本发布
+- [ ] 全局版本号已更新（grep 确认无遗漏）
+- [ ] 前端导航栏显示新版本号
+- [ ] `uv build` 成功生成 wheel + sdist
+- [ ] commit + tag 已推送
+- [ ] GitHub Release 已创建并附带 wheel
+- [ ] Release 页面可正常下载
