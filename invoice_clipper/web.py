@@ -724,7 +724,7 @@ def download_export(filename: str):
     filepath = export_dir / filename
     if not filepath.resolve().is_relative_to(export_dir.resolve()):
         raise HTTPException(404)
-    if not re.match(r'^报销(明细|发票|附件)_.+\.(xlsx|pdf|zip)$', filename):
+    if not re.match(r'^(报销(明细|发票)|源文件|发票附件)_.+\.(xlsx|pdf|zip)$', filename):
         raise HTTPException(404)
     if not filepath.exists():
         raise HTTPException(404)
