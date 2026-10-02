@@ -940,6 +940,7 @@ tr.clickable td:not(.checkbox-cell):not(.action-cell) {
   line-height: 1.4;
   word-break: break-all;
 }
+.amount-filter { min-width: 130px; }
 .date-cell { white-space: nowrap; color: #66738a; font-size: 12px; }
 .invoice-main-cell { min-width: 150px; }
 .invoice-main-cell strong, .amount-cell strong { display:block; color:var(--ink); font-size:13px; font-weight:600; }

@@ -8,6 +8,7 @@ import os
 import webbrowser
 import tempfile
 import zipfile
+from decimal import InvalidOperation
 from pathlib import Path
 from datetime import datetime
 
@@ -237,6 +238,7 @@ def retry_failed_import(request: Request, failure_id: int):
 @app.get("/list")
 def get_list(request: Request, search: str = "", status: list[str] = Query(default=["待确认", "正常"])):
     filters = build_filters(request)
+    amount_filter = request.query_params.get("amount", "").strip()
     filters["only_included"] = False
     invoices = query_invoices(filters) if any(k != "only_included" for k in filters) else get_all_invoices()
     tag_id = request.query_params.get("tag_id", "")
@@ -249,14 +251,29 @@ def get_list(request: Request, search: str = "", status: list[str] = Query(defau
     selected_states = {state_names[name] for name in status if name in state_names}
     invoices = [i for i in invoices if i.get("status") in selected_states]
 
+    # 金额按分精确匹配，避免浮点数比较误差。
+    if amount_filter:
+        try:
+            amount_cents_filter = amount_cents(amount_filter.replace(",", ""))
+            invoices = [i for i in invoices if amount_cents(i.get("amount_with_tax")) == amount_cents_filter]
+        except (TypeError, ValueError, InvalidOperation):
+            invoices = []
+
     search_lower = search.strip().lower()
     if search_lower:
+        search_amount_cents = None
+        try:
+            search_amount_cents = amount_cents(search_lower.replace("¥", "").replace(",", ""))
+        except (TypeError, ValueError, InvalidOperation):
+            pass
         invoices = [
             i for i in invoices
             if (search_lower in (i.get("seller_name") or "").lower()
                 or search_lower in (i.get("buyer_name") or "").lower()
                 or search_lower in (i.get("invoice_number") or "").lower()
-                or search_lower in (i.get("commodity_name") or "").lower())
+                or search_lower in (i.get("commodity_name") or "").lower()
+                or (search_amount_cents is not None
+                    and amount_cents(i.get("amount_with_tax")) == search_amount_cents))
         ]
 
     all_invs = get_all_invoices()
@@ -275,6 +292,7 @@ def get_list(request: Request, search: str = "", status: list[str] = Query(defau
         "search": search, "status_filter": status,
         "filters": {key: request.query_params.get(key, "") for key in
                     ("date_from", "date_to", "seller", "buyer", "project", "person")},
+        "amount_filter": amount_filter,
         "tag_id": tag_id,
         "all_tags": get_tags(),
         "invoice_tags": get_all_invoice_tags(),
