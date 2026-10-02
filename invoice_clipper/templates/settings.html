@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <div><h1>设置</h1><p>管理标签、归属项和发票库的辅助数据。</p></div>
+</div>
+
+<div class="assign-grid" id="assignments">
+  <div class="card">
+    <h3>归属项目</h3>
+    <p class="muted">用于批量归类和报销单筛选。</p>
+    <form method="POST" action="/settings/projects" class="inline-form"><div class="form-row"><div class="form-group" style="flex: 1;"><input type="text" name="name" placeholder="新项目名称" required></div><button type="submit" class="btn btn-primary btn-sm">添加</button></div></form>
+    <div class="assign-list">{% for p in projects %}<div class="assign-item"><span class="assign-name">{{ p.name }}</span><form method="POST" action="/settings/projects/{{ p.id }}/delete" onsubmit="return confirm('确认删除项目？')"><button type="submit" class="btn btn-ghost btn-sm">✕</button></form></div>{% else %}<p class="empty-hint">暂无归属项目</p>{% endfor %}</div>
+  </div>
+  <div class="card">
+    <h3>归属人</h3>
+    <p class="muted">用于标记发票由谁负责或报销。</p>
+    <form method="POST" action="/settings/persons" class="inline-form"><div class="form-row"><div class="form-group" style="flex: 1;"><input type="text" name="name" placeholder="新归属人姓名" required></div><button type="submit" class="btn btn-primary btn-sm">添加</button></div></form>
+    <div class="assign-list">{% for p in persons %}<div class="assign-item"><span class="assign-name">{{ p.name }}</span><form method="POST" action="/settings/persons/{{ p.id }}/delete" onsubmit="return confirm('确认删除归属人？')"><button type="submit" class="btn btn-ghost btn-sm">✕</button></form></div>{% else %}<p class="empty-hint">暂无归属人</p>{% endfor %}</div>
+  </div>
+  <div class="card">
+    <h3 id="tags">标签</h3>
+    <p class="muted">用标签补充项目和归属之外的分类。</p>
+    <form method="POST" action="/settings/tags" class="inline-form"><div class="form-row"><div class="form-group" style="flex: 1;"><input type="text" name="name" placeholder="新标签名称" required></div><div class="form-group"><input type="color" name="color" value="#3b82f6"></div><button type="submit" class="btn btn-primary btn-sm">创建</button></div></form>
+    <div class="assign-list">{% for t in tags %}<div class="assign-item"><span class="tag-badge-sm" style="background: {{ t.color }}20; color: {{ t.color }}; border: 1px solid {{ t.color }}40;">{{ t.name }}</span><form method="POST" action="/settings/tags/{{ t.id }}/delete" onsubmit="return confirm('确认删除标签？')"><button type="submit" class="btn btn-ghost btn-sm">✕</button></form></div>{% else %}<p class="empty-hint">暂无标签</p>{% endfor %}</div>
+  </div>
+</div>
+{% endblock %}

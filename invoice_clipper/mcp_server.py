@@ -29,6 +29,10 @@ from invoice_clipper import (
     get_tags, add_tag, delete_tag, get_invoice_tags, set_invoice_tags,
     InvoiceProcessor, export_excel, export_merged_pdf, build_export_label,
 )
+from invoice_clipper.workflow import (
+    change_invoice_state, delete_invoice_with_files, reimbursable_invoices,
+    record_reimbursement, amount_cents,
+)
 
 # ── 日志 ──────────────────────────────────────────
 logging.basicConfig(
@@ -118,9 +122,13 @@ def list_invoices(
     invoices.sort(key=lambda i: i.get("invoice_date") or "", reverse=True)
 
     if status == "正常":
-        invoices = [i for i in invoices if not i.get("excluded")]
+        invoices = [i for i in invoices if i.get("status") == "ready"]
     elif status == "排除":
-        invoices = [i for i in invoices if i.get("excluded")]
+        invoices = [i for i in invoices if i.get("status") == "excluded"]
+    elif status == "待确认":
+        invoices = [i for i in invoices if i.get("status") == "pending"]
+    elif status == "已报销":
+        invoices = [i for i in invoices if i.get("status") == "reported"]
 
     if search:
         search_lower = search.strip().lower()
@@ -145,6 +153,7 @@ def list_invoices(
             "belong_project": inv.get("belong_project") or "",
             "belong_person": inv.get("belong_person") or "",
             "excluded": bool(inv.get("excluded")),
+            "status": inv.get("status"),
         } for inv in invoices],
     }, ensure_ascii=False)
 
@@ -208,6 +217,7 @@ def query_invoices_tool(
             "belong_project": inv.get("belong_project") or "",
             "belong_person": inv.get("belong_person") or "",
             "excluded": bool(inv.get("excluded")),
+            "status": inv.get("status"),
         } for inv in invoices],
     }, ensure_ascii=False)
 
@@ -322,7 +332,7 @@ def exclude_invoice(invoice_id: int) -> str:
     inv = get_invoice_by_id(invoice_id)
     if not inv:
         return json.dumps({"error": f"发票 #{invoice_id} 不存在"}, ensure_ascii=False)
-    update_invoice_status(invoice_id, excluded=True)
+    change_invoice_state(invoice_id, "excluded")
     return json.dumps({"success": True, "invoice_id": invoice_id, "status": "excluded"}, ensure_ascii=False)
 
 
@@ -340,7 +350,7 @@ def include_invoice(invoice_id: int) -> str:
     inv = get_invoice_by_id(invoice_id)
     if not inv:
         return json.dumps({"error": f"发票 #{invoice_id} 不存在"}, ensure_ascii=False)
-    update_invoice_status(invoice_id, excluded=False)
+    change_invoice_state(invoice_id, "ready")
     return json.dumps({"success": True, "invoice_id": invoice_id, "status": "reimbursable"}, ensure_ascii=False)
 
 
@@ -361,26 +371,10 @@ def delete_invoice_tool(invoice_id: int) -> str:
     if not inv:
         return json.dumps({"error": f"发票 #{invoice_id} 不存在"}, ensure_ascii=False)
 
-    # 删除附件文件
-    for att in get_attachments(invoice_id):
-        p = Path(att["stored_path"])
-        if p.exists():
-            p.unlink()
-
-    # 删除归档的发票文件
-    stored = inv.get("stored_path")
-    if stored:
-        p = Path(stored)
-        if p.exists():
-            p.unlink()
-        parent = p.parent
-        try:
-            if parent.exists() and not any(parent.iterdir()):
-                parent.rmdir()
-        except OSError:
-            pass
-
-    delete_invoice(invoice_id)
+    try:
+        delete_invoice_with_files(invoice_id)
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)}, ensure_ascii=False)
     return json.dumps({"success": True, "invoice_id": invoice_id, "action": "deleted"}, ensure_ascii=False)
 
 
@@ -431,10 +425,10 @@ def get_invoice_stats() -> str:
     _ensure_ready()
     invoices = get_all_invoices()
     total = len(invoices)
-    ok_count = sum(1 for i in invoices if not i.get("excluded"))
-    excluded_count = total - ok_count
+    ok_count = sum(1 for i in invoices if i.get("status") == "ready")
+    excluded_count = sum(1 for i in invoices if i.get("status") == "excluded")
     total_amount = sum(i.get("amount_with_tax") or 0 for i in invoices)
-    reimbursable_amount = sum(i.get("amount_with_tax") or 0 for i in invoices if not i.get("excluded"))
+    reimbursable_amount = sum(i.get("amount_with_tax") or 0 for i in invoices if i.get("status") == "ready")
 
     return json.dumps({
         "total_invoices": total,
@@ -657,9 +651,7 @@ def export_invoices_excel(
     if only_included:
         filters["only_included"] = True
 
-    invoices = query_invoices(filters) if filters else get_all_invoices()
-    if only_included and not any(k != "only_included" for k in filters):
-        invoices = [i for i in invoices if not i.get("excluded")]
+    invoices = reimbursable_invoices(filters) if only_included else query_invoices({**filters, "only_included": False})
 
     if not invoices:
         return json.dumps({"warning": "没有符合条件的发票", "count": 0}, ensure_ascii=False)
@@ -671,7 +663,9 @@ def export_invoices_excel(
     excel_path = export_dir / f"报销明细_{label}_{timestamp}.xlsx"
 
     export_excel(invoices, excel_path)
-    total_amount = sum(i.get("amount_with_tax") or 0 for i in invoices)
+    total_amount = sum(amount_cents(i.get("amount_with_tax")) for i in invoices) / 100
+    if only_included:
+        record_reimbursement(invoices, [excel_path])
 
     return json.dumps({
         "success": True,
@@ -716,9 +710,7 @@ def export_invoices_pdf(
     if only_included:
         filters["only_included"] = True
 
-    invoices = query_invoices(filters) if filters else get_all_invoices()
-    if only_included and not any(k != "only_included" for k in filters):
-        invoices = [i for i in invoices if not i.get("excluded")]
+    invoices = reimbursable_invoices(filters) if only_included else query_invoices({**filters, "only_included": False})
 
     if not invoices:
         return json.dumps({"warning": "没有符合条件的发票", "count": 0}, ensure_ascii=False)
@@ -730,9 +722,11 @@ def export_invoices_pdf(
     pdf_path = export_dir / f"报销发票_{label}_{timestamp}.pdf"
 
     result = export_merged_pdf(invoices, pdf_path)
-    total_amount = sum(i.get("amount_with_tax") or 0 for i in invoices)
+    total_amount = sum(amount_cents(i.get("amount_with_tax")) for i in invoices) / 100
 
     if result:
+        if only_included:
+            record_reimbursement(invoices, [pdf_path])
         return json.dumps({
             "success": True,
             "file_path": str(pdf_path),

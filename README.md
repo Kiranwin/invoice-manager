@@ -2,7 +2,7 @@
   <img src="https://img.shields.io/badge/Python-3.12+-blue.svg" alt="Python 3.12+">
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License">
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg" alt="Platform">
-  <img src="https://img.shields.io/badge/Version-3.3.2-brightgreen.svg" alt="v3.3.2">
+  <img src="https://img.shields.io/badge/Version-3.4.0-brightgreen.svg" alt="v3.4.0">
 </p>
 
 <h1 align="center">发票夹子 🧾</h1>
@@ -36,7 +36,7 @@
 
 ```bash
 # 从 Wheel 包安装
-pip install dist/invoice_manager-3.3.2-py3-none-any.whl
+pip install dist/invoice_manager-3.4.0-py3-none-any.whl
 ```
 
 ### 启动 Web UI
@@ -169,7 +169,7 @@ MCP Server 暴露以下工具，覆盖发票管理全流程：
 ### Wheel 包（推荐）
 
 ```bash
-pip install dist/invoice_manager-3.3.2-py3-none-any.whl
+pip install dist/invoice_manager-3.4.0-py3-none-any.whl
 ```
 
 安装后可用命令：
@@ -202,6 +202,8 @@ uv run python -m invoice_clipper
 
 首次运行自动复制示例配置并初始化数据库。
 
+报销单默认导出到用户 `Documents/发票夹子/exports`。可在配置文件的 `storage.export_dir` 指定其他目录；收件箱中识别失败的原文件保存在 `storage.base_dir/failed_imports`，供之后重试。
+
 ### 识别引擎
 
 ```yaml
@@ -230,14 +232,11 @@ ocr:
 
 | 页面 | 路由 | 功能 |
 |------|------|------|
-| 📤 扫描发票 | `/scan` | 文件上传 + 归属分配 + 实时识别结果 |
-| 📋 发票列表 | `/list` | 表格展示、排序搜索、行内快速操作、批量操作 |
-| 🔍 查询筛选 | `/query` | 多条件筛选（含标签过滤） |
+| 📥 收件箱 | `/inbox` | 上传发票、核对待确认项、查看识别失败项并重试 |
+| 📋 发票库 | `/list` | 搜索、状态与标签筛选、编辑及批量操作 |
 | ✏️ 编辑详情 | `/list/{id}` | 全字段编辑 + 附件管理 + 标签选择 |
-| 🏷️ 标签管理 | `/tags` | 创建/删除彩色标签 |
-| 🎯 智能凑票 | `/match-amount` | 输入目标金额，自动匹配最优发票组合 |
-| 📊 导出报销 | `/export` | 选发票/按条件、合并PDF/源文件ZIP/附件打包 |
-| 🏷️ 归属管理 | `/assignments` | 创建/删除归属项目与归属人 |
+| 📊 报销单 | `/export` | 凑票、选票、导出与历史文件下载 |
+| ⚙️ 设置 | `/settings` | 管理归属项目、归属人和标签 |
 
 ---
 
@@ -250,11 +249,12 @@ invoice-manager/
 │   ├── __init__.py               # load_config + 所有模块导出
 │   ├── __main__.py               # pip 入口点
 │   ├── __run__.py                # 进程锁启动入口（支持 --debug）
-│   ├── web.py                    # FastAPI Web UI (v3.3.2)
+│   ├── web.py                    # FastAPI Web UI (v3.4.0)
 │   ├── mcp_server.py             # MCP AI Agent 接口
 │   ├── database.py               # 数据库调度层
 │   ├── db_backends.py            # SQLite + PostgreSQL 后端
 │   ├── processor.py              # 发票处理主流程
+│   ├── workflow.py               # 状态、报销单与失败导入业务操作
 │   ├── exporter.py               # Excel / PDF / ZIP 导出
 │   ├── file_utils.py             # 文件转换与归档
 │   ├── matcher.py                # 智能凑票算法
@@ -263,14 +263,11 @@ invoice-manager/
 │   │   └── style.css             # 完整样式系统
 │   ├── templates/                # Jinja2 模板
 │   │   ├── base.html             # 布局 + 导航
-│   │   ├── scan.html             # 扫描上传
-│   │   ├── list.html             # 发票列表
+│   │   ├── scan.html             # 收件箱与上传
+│   │   ├── list.html             # 发票库
 │   │   ├── edit.html             # 编辑 + 附件 + 标签
-│   │   ├── query.html            # 查询筛选
-│   │   ├── export.html           # 导出选项
-│   │   ├── tags.html             # 标签管理
-│   │   ├── match_amount.html     # 智能凑票
-│   │   └── assignments.html      # 归属管理
+│   │   ├── export.html           # 凑票、导出与历史记录
+│   │   └── settings.html         # 归属与标签设置
 │   └── engines/                  # 识别引擎
 │       ├── base.py               # 抽象基类
 │       ├── _utils.py             # 共享工具函数
@@ -278,7 +275,7 @@ invoice-manager/
 │       ├── baidu_ocr.py          # 百度 OCR
 │       └── llm_vision.py         # 大模型视觉
 └── dist/
-    └── invoice_manager-3.3.2-py3-none-any.whl
+    └── invoice_manager-3.4.0-py3-none-any.whl
 ```
 
 ---
@@ -304,13 +301,15 @@ invoice-manager/
 
 ---
 
-## 🎯 v3.3.2 新增功能
+## 🎯 v3.4.0 新增功能
 
 | 功能 | 说明 |
 |------|------|
 | 🤖 **MCP 文档完善** | 补充 MCP AI Agent 接口完整文档（启动方式、客户端接入、18 个工具清单） |
 | ✅ **导出标记已报销** | 导出时可勾选「标记为已报销」，已报销发票不再参与下次凑票 |
 | 🐛 **凑票下载 404 修复** | 修复智能凑票导出源文件 ZIP 返回 404 的问题 |
+| 🎨 **工作台 UI 重构** | 统一收件箱、发票库、报销单和设置的应用壳层与详情页 |
+| 🧹 **移除旧入口** | 收敛为 `/inbox`、`/list`、`/export`、`/settings` 四个主工作区 |
 
 ---
 

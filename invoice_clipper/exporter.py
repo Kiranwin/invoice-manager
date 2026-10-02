@@ -4,6 +4,7 @@
 移除问题发票导出相关代码
 """
 import logging
+from decimal import Decimal
 import shutil
 from pathlib import Path
 from typing import List, Optional
@@ -61,11 +62,11 @@ def export_excel(invoices: List[dict], output_path: Path) -> Path:
     sorted_inv = sorted(invoices, key=lambda x: x.get("invoice_date") or "")
     even_fill = PatternFill("solid", fgColor="DCE6F1")
     odd_fill = PatternFill("solid", fgColor="FFFFFF")
-    total_amount = 0.0
+    total_amount = Decimal("0.00")
 
     for row_idx, inv in enumerate(sorted_inv, 2):
         fill = even_fill if row_idx % 2 == 0 else odd_fill
-        amount = inv.get("amount_with_tax") or 0
+        amount = Decimal(str(inv.get("amount_with_tax") or 0)).quantize(Decimal("0.01"))
         total_amount += amount
 
         # 税率格式化
@@ -85,7 +86,7 @@ def export_excel(invoices: List[dict], output_path: Path) -> Path:
             inv.get("seller_tax_num") or "",
             tax_rate_str,
             inv.get("tax_amount") or 0,
-            amount,
+            float(amount),
             inv.get("category") or "",
             inv.get("belong_project") or "",
             inv.get("belong_person") or "",
@@ -117,7 +118,7 @@ def export_excel(invoices: List[dict], output_path: Path) -> Path:
     total_label.alignment = Alignment(horizontal="center", vertical="center")
     total_label.border = border
 
-    total_cell = ws.cell(row=total_row, column=13, value=total_amount)
+    total_cell = ws.cell(row=total_row, column=13, value=float(total_amount))
     total_cell.font = total_font
     total_cell.fill = total_fill
     total_cell.number_format = "#,##0.00"

@@ -1,9 +1,47 @@
 {% extends "base.html" %}
 {% block content %}
 
+<div class="page-header">
+  <div><h1>报销单</h1><p>先选票或凑票，再生成可追溯的报销文件。</p></div>
+  <div class="btn-group"><span class="page-chip">可报销票据工作区</span><a href="/list?status=正常" class="btn btn-outline btn-sm">从发票库选票</a></div>
+</div>
+
+<div class="card" id="match">
+  <div class="section-heading"><div><h3>按目标金额凑票</h3><p>系统会从已确认、可报销的发票中生成接近目标金额的组合。</p></div><span class="section-number">01</span></div>
+  <form method="POST" action="/export/match">
+    <div class="form-row">
+      <div class="form-group"><label>目标金额 (¥)</label><input type="number" step="0.01" min="0.01" name="target_amount" value="{{ target_amount or '' }}" required></div>
+      <div class="form-group"><label>最多张数</label><input type="number" min="0" max="50" name="max_count" value="{{ max_count if max_count and max_count < 9999 else '' }}" placeholder="不限"></div>
+      <div class="form-group"><label>开始日期</label><input type="date" name="date_from" value="{{ match_filters.date_from or '' }}"></div>
+      <div class="form-group"><label>结束日期</label><input type="date" name="date_to" value="{{ match_filters.date_to or '' }}"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>归属项目</label><input type="text" name="project" value="{{ match_filters.project or '' }}"></div>
+      <div class="form-group"><label>归属人</label><input type="text" name="person" value="{{ match_filters.person or '' }}"></div>
+      <button type="submit" class="btn btn-primary">生成候选方案</button>
+    </div>
+  </form>
+</div>
+
+{% if candidates is not none %}
 <div class="card">
-  <h3>导出报销单</h3>
-  <p style="color: #78716c; margin-bottom: 16px;">Excel 明细表始终生成。可选合并 PDF 或打包源文件。</p>
+  <h3>候选方案</h3>
+  {% if candidates %}
+  <p class="muted">{{ total_candidates }} 张可报销发票参与匹配，合计 ¥{{ "%.2f" | format(total_available) }}</p>
+  {% for candidate, subtotal in candidates %}
+  <div class="candidate-row">
+    <div><strong>方案 {{ loop.index }}</strong> · {{ candidate | length }} 张 · ¥{{ "%.2f" | format(subtotal) }} · 差额 ¥{{ "%.2f" | format(target_amount - subtotal) }}</div>
+    <div class="muted">{% for inv in candidate %}{{ inv.seller_name or inv.invoice_number or ('#' ~ inv.id) }}{% if not loop.last %}、{% endif %}{% endfor %}</div>
+      <a href="/export?ids={% for inv in candidate %}{{ inv.id }}{% if not loop.last %},{% endif %}{% endfor %}#create" class="btn btn-outline btn-sm">用此方案生成报销单</a>
+  </div>
+  {% endfor %}
+  {% else %}<p class="empty-hint">未找到符合条件的组合，请调整目标金额或筛选条件。</p>{% endif %}
+</div>
+{% endif %}
+
+<div class="card" id="create">
+  <div class="section-heading"><div><h3>生成报销单</h3><p>选择输出格式，生成后会自动保存为一条报销记录。</p></div><span class="section-number">02</span></div>
+  <p style="color: #78716c; margin-bottom: 16px;">选择发票后生成 Excel、合并 PDF 或源文件 ZIP。生成记录会保留在下方。</p>
 
   {% if selected_invoices %}
   <div class="selected-inv-summary">
@@ -30,10 +68,7 @@
 
     {% if not selected_ids %}
     <div class="form-row" style="margin-top: 8px;">
-      <div class="form-group checkbox">
-        <input type="checkbox" name="only_included" value="1" id="exp_only" checked>
-        <label for="exp_only">仅可报销</label>
-      </div>
+      <p class="muted">只会使用已确认且可报销的发票。</p>
     </div>
     {% endif %}
 
@@ -76,6 +111,7 @@
 {% if download_links %}
 <div class="result-card">
   <h3>导出完成</h3>
+  <p>报销单 #{{ batch_id }}</p>
   {% if invoice_count is not none %}
   <div class="summary">共导出 <strong>{{ invoice_count }}</strong> 张发票，可报销合计 <strong>¥{{ "%.2f" | format(total_amount) }}</strong></div>
   {% endif %}
@@ -87,6 +123,18 @@
     <a href="/export/download/{{ dl.filename }}" class="btn btn-success">{{ dl.label }}</a>
     {% endfor %}
   </div>
+</div>
+{% endif %}
+
+{% if history %}
+<div class="card">
+  <h3>最近报销单</h3>
+  {% for batch in history[:10] %}
+  <div class="summary">
+    #{{ batch.id }} · {{ batch.created_at[:16] }} · ¥{{ "%.2f" | format(batch.total_cents / 100) }} · {{ '已报销' if batch.status == 'reported' else '已导出' }}
+    {% for filename in batch.files %}<a href="/export/download/{{ filename }}" style="margin-left: 8px;">{{ filename }}</a>{% endfor %}
+  </div>
+  {% endfor %}
 </div>
 {% endif %}
 

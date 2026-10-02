@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+from decimal import Decimal
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
@@ -27,6 +28,10 @@ INVOICE_COLS = [
     "source", "original_filename", "stored_path",
     "created_at", "raw_text", "raw_json",
 ]
+
+
+def amount_cents(value) -> int:
+    return int((Decimal(str(value or 0)) * 100).quantize(Decimal("1")))
 
 
 # ── 抽象基类 ──────────────────────────────────────
@@ -66,6 +71,34 @@ class DatabaseBackend(ABC):
 
     @abstractmethod
     def update_invoice(self, inv_id: int, updates: dict):
+        ...
+
+    @abstractmethod
+    def set_invoice_state(self, inv_id: int, status: str) -> bool:
+        ...
+
+    @abstractmethod
+    def create_reimbursement(self, invoices: List[dict], output_files: List[str], mark_reported: bool) -> int:
+        ...
+
+    @abstractmethod
+    def list_reimbursements(self) -> List[dict]:
+        ...
+
+    @abstractmethod
+    def invoice_has_reimbursement(self, inv_id: int) -> bool:
+        ...
+
+    @abstractmethod
+    def add_import_failure(self, filename: str, stored_path: str, error: str) -> int:
+        ...
+
+    @abstractmethod
+    def list_import_failures(self) -> List[dict]:
+        ...
+
+    @abstractmethod
+    def delete_import_failure(self, failure_id: int) -> bool:
         ...
 
     @abstractmethod
@@ -247,12 +280,46 @@ class SQLiteBackend(DatabaseBackend):
                     original_filename TEXT,
                     stored_path TEXT,
                     excluded INTEGER DEFAULT 0,
+                    status TEXT DEFAULT 'pending',
                     created_at TEXT,
                     raw_text TEXT,
                     raw_json TEXT
                 )
             """)
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(invoices)")}
+            if "status" not in columns:
+                conn.execute("ALTER TABLE invoices ADD COLUMN status TEXT")
+                conn.execute("UPDATE invoices SET status=CASE WHEN excluded=1 THEN 'excluded' ELSE 'ready' END")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_invoice_status ON invoices(status)")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS reimbursement_batches (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    total_cents INTEGER NOT NULL,
+                    output_files TEXT NOT NULL
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS reimbursement_items (
+                    batch_id INTEGER NOT NULL REFERENCES reimbursement_batches(id) ON DELETE CASCADE,
+                    invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE RESTRICT,
+                    amount_cents INTEGER NOT NULL,
+                    PRIMARY KEY (batch_id, invoice_id)
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS import_failures (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    original_filename TEXT NOT NULL,
+                    stored_path TEXT NOT NULL,
+                    error TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+            """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_invoice_number ON invoices(invoice_number)")
+            # Existing databases from supported releases already contain the
+            # full invoice schema; migration only adds the new workflow fields.
             conn.execute("CREATE INDEX IF NOT EXISTS idx_invoice_date ON invoices(invoice_date)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_seller_name ON invoices(seller_name)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_buyer_name ON invoices(buyer_name)")
@@ -320,9 +387,58 @@ class SQLiteBackend(DatabaseBackend):
     def insert_invoice(self, data: dict) -> int:
         placeholders = ",".join(":" + c for c in INVOICE_COLS)
         return self._execute_insert(
-            f"INSERT INTO invoices ({','.join(INVOICE_COLS)}) VALUES ({placeholders})",
-            {k: v for k, v in data.items() if k in INVOICE_COLS}
+            f"INSERT INTO invoices ({','.join(INVOICE_COLS)}, status) VALUES ({placeholders}, :status)",
+            {**{c: data.get(c) for c in INVOICE_COLS}, "status": data.get("status", "pending")}
         )
+
+    def set_invoice_state(self, inv_id: int, status: str) -> bool:
+        return self._execute_update(
+            "UPDATE invoices SET status=?, excluded=? WHERE id=?",
+            [status, int(status != "ready"), inv_id]
+        ) > 0
+
+    def create_reimbursement(self, invoices: List[dict], output_files: List[str], mark_reported: bool) -> int:
+        with self.get_conn() as conn:
+            ids = [i["id"] for i in invoices]
+            placeholders = ",".join("?" for _ in ids)
+            rows = conn.execute(f"SELECT id, amount_with_tax, status FROM invoices WHERE id IN ({placeholders})", ids).fetchall()
+            if len(rows) != len(ids) or any(row["status"] != "ready" for row in rows):
+                raise ValueError("选中的发票已变化，请刷新后重试")
+            cents = {row["id"]: amount_cents(row["amount_with_tax"]) for row in rows}
+            cur = conn.execute(
+                "INSERT INTO reimbursement_batches (created_at, status, total_cents, output_files) VALUES (?, ?, ?, ?)",
+                [datetime.now().isoformat(), "reported" if mark_reported else "exported",
+                 sum(cents.values()), json.dumps(output_files, ensure_ascii=False)]
+            )
+            batch_id = cur.lastrowid
+            conn.executemany(
+                "INSERT INTO reimbursement_items (batch_id, invoice_id, amount_cents) VALUES (?, ?, ?)",
+                [(batch_id, inv_id, cents[inv_id]) for inv_id in ids]
+            )
+            if mark_reported:
+                conn.execute(f"UPDATE invoices SET status='reported', excluded=1 WHERE id IN ({placeholders})", ids)
+            conn.commit()
+            return batch_id
+
+    def list_reimbursements(self) -> List[dict]:
+        return self._fetchall("SELECT * FROM reimbursement_batches ORDER BY id DESC")
+
+    def invoice_has_reimbursement(self, inv_id: int) -> bool:
+        return self._fetchone("SELECT 1 FROM reimbursement_items WHERE invoice_id=?", [inv_id]) is not None
+
+    def add_import_failure(self, filename: str, stored_path: str, error: str) -> int:
+        return self._execute_insert(
+            "INSERT INTO import_failures (original_filename, stored_path, error, created_at) "
+            "VALUES (:original_filename, :stored_path, :error, :created_at)",
+            {"original_filename": filename, "stored_path": stored_path,
+             "error": error, "created_at": datetime.now().isoformat()}
+        )
+
+    def list_import_failures(self) -> List[dict]:
+        return self._fetchall("SELECT * FROM import_failures ORDER BY id DESC")
+
+    def delete_import_failure(self, failure_id: int) -> bool:
+        return self._execute_update("DELETE FROM import_failures WHERE id=?", [failure_id]) > 0
 
     def is_duplicate(self, invoice_number: str, amount_with_tax: float) -> bool:
         if not invoice_number:
@@ -365,7 +481,7 @@ class SQLiteBackend(DatabaseBackend):
             sql += " AND belong_person = ?"
             params.append(filters["person"])
         if filters.get("only_included", True):
-            sql += " AND excluded = 0"
+            sql += " AND status = 'ready'"
         if filters.get("exclude_ids"):
             placeholders = ",".join("?" * len(filters["exclude_ids"]))
             sql += f" AND id NOT IN ({placeholders})"
@@ -375,7 +491,8 @@ class SQLiteBackend(DatabaseBackend):
         return self._fetchall(sql, params)
 
     def update_invoice_status(self, inv_id: int, excluded: bool = True):
-        self._execute("UPDATE invoices SET excluded=? WHERE id=?", [1 if excluded else 0, inv_id])
+        self._execute("UPDATE invoices SET excluded=?, status=? WHERE id=?",
+                      [1 if excluded else 0, "excluded" if excluded else "ready", inv_id])
 
     def update_invoice(self, inv_id: int, updates: dict):
         if not updates:
@@ -591,8 +708,9 @@ class PostgreSQLBackend(DatabaseBackend):
         with self.get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, params)
+                inserted_id = cur.fetchone()[0]
                 conn.commit()
-                return cur.fetchone()[0]
+                return inserted_id
 
     def _execute_update(self, sql: str, params: list = None) -> int:
         with self.get_conn() as conn:
@@ -634,9 +752,39 @@ class PostgreSQLBackend(DatabaseBackend):
                         original_filename TEXT,
                         stored_path TEXT,
                         excluded INTEGER DEFAULT 0,
+                        status TEXT DEFAULT 'pending',
                         created_at TEXT,
                         raw_text TEXT,
                         raw_json TEXT
+                    )
+                """)
+                cur.execute("ALTER TABLE invoices ADD COLUMN IF NOT EXISTS status TEXT")
+                cur.execute("UPDATE invoices SET status=CASE WHEN excluded=1 THEN 'excluded' ELSE 'ready' END WHERE status IS NULL")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_invoice_status ON invoices(status)")
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS reimbursement_batches (
+                        id SERIAL PRIMARY KEY,
+                        created_at TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        total_cents BIGINT NOT NULL,
+                        output_files TEXT NOT NULL
+                    )
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS reimbursement_items (
+                        batch_id INTEGER NOT NULL REFERENCES reimbursement_batches(id) ON DELETE CASCADE,
+                        invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE RESTRICT,
+                        amount_cents BIGINT NOT NULL,
+                        PRIMARY KEY (batch_id, invoice_id)
+                    )
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS import_failures (
+                        id SERIAL PRIMARY KEY,
+                        original_filename TEXT NOT NULL,
+                        stored_path TEXT NOT NULL,
+                        error TEXT NOT NULL,
+                        created_at TEXT NOT NULL
                     )
                 """)
                 cur.execute("""
@@ -722,13 +870,64 @@ class PostgreSQLBackend(DatabaseBackend):
 
     def insert_invoice(self, data: dict) -> int:
         cols = INVOICE_COLS
-        placeholders = ",".join("%s" for _ in cols)
-        names = ",".join(cols)
-        values = [data.get(c) for c in cols]
+        placeholders = ",".join("%s" for _ in cols + ["status"])
+        names = ",".join(cols + ["status"])
+        values = [data.get(c) for c in cols] + [data.get("status", "pending")]
         return self._execute_insert(
             f"INSERT INTO invoices ({names}) VALUES ({placeholders}) RETURNING id",
             values
         )
+
+    def set_invoice_state(self, inv_id: int, status: str) -> bool:
+        return self._execute_update(
+            "UPDATE invoices SET status=%s, excluded=%s WHERE id=%s",
+            [status, int(status != "ready"), inv_id]
+        ) > 0
+
+    def create_reimbursement(self, invoices: List[dict], output_files: List[str], mark_reported: bool) -> int:
+        with self.get_conn() as conn:
+            with conn.cursor() as cur:
+                ids = [i["id"] for i in invoices]
+                cur.execute("SELECT id, amount_with_tax, status FROM invoices WHERE id = ANY(%s) FOR UPDATE", [ids])
+                rows = cur.fetchall()
+                if len(rows) != len(ids) or any(row[2] != "ready" for row in rows):
+                    raise ValueError("选中的发票已变化，请刷新后重试")
+                cents = {row[0]: amount_cents(row[1]) for row in rows}
+                cur.execute(
+                    "INSERT INTO reimbursement_batches (created_at, status, total_cents, output_files) "
+                    "VALUES (%s, %s, %s, %s) RETURNING id",
+                    [datetime.now().isoformat(), "reported" if mark_reported else "exported",
+                     sum(cents.values()), json.dumps(output_files, ensure_ascii=False)]
+                )
+                batch_id = cur.fetchone()[0]
+                for inv_id in ids:
+                    cur.execute(
+                        "INSERT INTO reimbursement_items (batch_id, invoice_id, amount_cents) VALUES (%s, %s, %s)",
+                        [batch_id, inv_id, cents[inv_id]]
+                    )
+                if mark_reported:
+                    cur.execute("UPDATE invoices SET status='reported', excluded=1 WHERE id = ANY(%s)", [ids])
+            conn.commit()
+            return batch_id
+
+    def list_reimbursements(self) -> List[dict]:
+        return self._fetchall("SELECT * FROM reimbursement_batches ORDER BY id DESC")
+
+    def invoice_has_reimbursement(self, inv_id: int) -> bool:
+        return self._fetchone("SELECT 1 FROM reimbursement_items WHERE invoice_id=%s", [inv_id]) is not None
+
+    def add_import_failure(self, filename: str, stored_path: str, error: str) -> int:
+        return self._execute_insert(
+            "INSERT INTO import_failures (original_filename, stored_path, error, created_at) "
+            "VALUES (%s, %s, %s, %s) RETURNING id",
+            [filename, stored_path, error, datetime.now().isoformat()]
+        )
+
+    def list_import_failures(self) -> List[dict]:
+        return self._fetchall("SELECT * FROM import_failures ORDER BY id DESC")
+
+    def delete_import_failure(self, failure_id: int) -> bool:
+        return self._execute_update("DELETE FROM import_failures WHERE id=%s", [failure_id]) > 0
 
     def is_duplicate(self, invoice_number: str, amount_with_tax: float) -> bool:
         if not invoice_number:
@@ -771,7 +970,7 @@ class PostgreSQLBackend(DatabaseBackend):
             sql += " AND belong_person = %s"
             params.append(filters["person"])
         if filters.get("only_included", True):
-            sql += " AND excluded = 0"
+            sql += " AND status = 'ready'"
         if filters.get("exclude_ids"):
             placeholders = ",".join("%s" for _ in filters["exclude_ids"])
             sql += f" AND id NOT IN ({placeholders})"
@@ -781,7 +980,8 @@ class PostgreSQLBackend(DatabaseBackend):
         return self._fetchall(sql, params)
 
     def update_invoice_status(self, inv_id: int, excluded: bool = True):
-        self._execute("UPDATE invoices SET excluded=%s WHERE id=%s", [1 if excluded else 0, inv_id])
+        self._execute("UPDATE invoices SET excluded=%s, status=%s WHERE id=%s",
+                      [1 if excluded else 0, "excluded" if excluded else "ready", inv_id])
 
     def update_invoice(self, inv_id: int, updates: dict):
         if not updates:

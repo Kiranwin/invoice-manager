@@ -1,6 +1,11 @@
 {% extends "base.html" %}
 {% block content %}
 
+<div class="page-header">
+  <div><h1>发票库</h1><p>统一查看、核对和筛选所有发票。</p></div>
+  <a href="/inbox" class="btn btn-primary btn-sm">导入新发票</a>
+</div>
+
 <div class="stats">
   <div class="stat-card">
     <div class="stat-label">发票总数</div>
@@ -14,6 +19,8 @@
     <div class="stat-label">已排除</div>
     <div class="stat-value negative">{{ stats.excluded_count }}</div>
   </div>
+  <div class="stat-card"><div class="stat-label">待确认</div><div class="stat-value">{{ stats.pending_count }}</div></div>
+  <div class="stat-card"><div class="stat-label">已报销</div><div class="stat-value">{{ stats.reported_count }}</div></div>
   <div class="stat-card">
     <div class="stat-label">可报销金额</div>
     <div class="stat-value">{{ "¥%.2f" | format(stats.reimbursable_amount) }}</div>
@@ -29,6 +36,10 @@
         <input type="text" name="search" placeholder="销售方 / 购买方 / 发票号码 / 项目名称" value="{{ search }}">
       </div>
       <div class="form-group checkbox">
+        <input type="checkbox" name="status" value="待确认" id="st_pending" {{ 'checked' if '待确认' in status_filter else '' }}>
+        <label for="st_pending">待确认</label>
+      </div>
+      <div class="form-group checkbox">
         <input type="checkbox" name="status" value="正常" id="st_normal" {{ 'checked' if '正常' in status_filter else '' }}>
         <label for="st_normal">正常</label>
       </div>
@@ -36,6 +47,18 @@
         <input type="checkbox" name="status" value="排除" id="st_excluded" {{ 'checked' if '排除' in status_filter else '' }}>
         <label for="st_excluded">排除</label>
       </div>
+      <div class="form-group checkbox"><input type="checkbox" name="status" value="已报销" id="st_reported" {{ 'checked' if '已报销' in status_filter else '' }}><label for="st_reported">已报销</label></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>开始日期</label><input type="date" name="date_from" value="{{ filters.date_from }}"></div>
+      <div class="form-group"><label>结束日期</label><input type="date" name="date_to" value="{{ filters.date_to }}"></div>
+      <div class="form-group"><label>销售方</label><input type="text" name="seller" value="{{ filters.seller }}"></div>
+      <div class="form-group"><label>购买方</label><input type="text" name="buyer" value="{{ filters.buyer }}"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>归属项目</label><select name="project"><option value="">全部</option>{% for p in projects %}<option value="{{ p.name }}" {{ 'selected' if filters.project == p.name }}>{{ p.name }}</option>{% endfor %}</select></div>
+      <div class="form-group"><label>归属人</label><select name="person"><option value="">全部</option>{% for p in persons %}<option value="{{ p.name }}" {{ 'selected' if filters.person == p.name }}>{{ p.name }}</option>{% endfor %}</select></div>
+      <div class="form-group"><label>标签</label><select name="tag_id"><option value="">全部</option>{% for t in all_tags %}<option value="{{ t.id }}" {{ 'selected' if tag_id == t.id|string }}>{{ t.name }}</option>{% endfor %}</select></div>
       <button type="submit" class="btn btn-primary">筛选</button>
     </div>
   </form>
@@ -48,14 +71,11 @@
       <thead>
         <tr>
           <th class="checkbox-cell"><input type="checkbox" id="select-all" title="全选"></th>
-          <th data-sort="invoice_date" class="sorted-desc">开票日期<span class="sort-icon">▼</span></th>
-          <th data-sort="invoice_number">发票号码<span class="sort-icon">⇅</span></th>
-          <th data-sort="commodity_name">项目名称<span class="sort-icon">⇅</span></th>
-          <th data-sort="seller_name">销售方<span class="sort-icon">⇅</span></th>
-          <th data-sort="buyer_name">购买方<span class="sort-icon">⇅</span></th>
-          <th data-sort="amount_with_tax">价税合计<span class="sort-icon">⇅</span></th>
-          <th data-sort="belong_project">归属项目<span class="sort-icon">⇅</span></th>
-          <th data-sort="belong_person">归属人<span class="sort-icon">⇅</span></th>
+          <th data-sort="invoice_date" class="sorted-desc">日期<span class="sort-icon">▼</span></th>
+          <th data-sort="seller_name">发票信息<span class="sort-icon">⇅</span></th>
+          <th data-sort="commodity_name">项目<span class="sort-icon">⇅</span></th>
+          <th data-sort="amount_with_tax">金额<span class="sort-icon">⇅</span></th>
+          <th data-sort="belong_project">归属<span class="sort-icon">⇅</span></th>
           <th data-sort="excluded">状态<span class="sort-icon">⇅</span></th>
           <th>标签</th>
           <th>操作</th>
@@ -63,18 +83,15 @@
       </thead>
       <tbody>
         {% for inv in invoices %}
-        {% set excluded = inv.excluded == 1 %}
+        {% set excluded = inv.status == 'excluded' %}
         <tr class="{{ 'excluded' if excluded else '' }}">
-          <td class="checkbox-cell"><input type="checkbox" class="row-checkbox" value="{{ inv.id }}"></td>
-          <td class="clickable" onclick="location.href='/list/{{ inv.id }}'">{{ inv.invoice_date or '-' }}</td>
-          <td class="clickable" onclick="location.href='/list/{{ inv.id }}'">{{ inv.invoice_number or '-' }}</td>
-          <td class="clickable" onclick="location.href='/list/{{ inv.id }}'">{{ inv.commodity_name or '-' }}</td>
-          <td class="clickable" onclick="location.href='/list/{{ inv.id }}'">{{ inv.seller_name or '-' }}</td>
-          <td class="clickable" onclick="location.href='/list/{{ inv.id }}'">{{ inv.buyer_name or '-' }}</td>
-          <td class="money clickable" onclick="location.href='/list/{{ inv.id }}'">{{ "¥%.2f" | format(inv.amount_with_tax or 0) }}</td>
-          <td class="clickable" onclick="location.href='/list/{{ inv.id }}'">{{ inv.belong_project or '-' }}</td>
-          <td class="clickable" onclick="location.href='/list/{{ inv.id }}'">{{ inv.belong_person or '-' }}</td>
-          <td class="center clickable" onclick="location.href='/list/{{ inv.id }}'"><span class="tag {{ 'tag-danger' if excluded else 'tag-success' }}">{{ '已排除' if excluded else '正常' }}</span></td>
+          <td class="checkbox-cell"><input type="checkbox" class="row-checkbox" value="{{ inv.id }}" data-status="{{ inv.status }}"></td>
+          <td class="clickable date-cell" onclick="location.href='/list/{{ inv.id }}'">{{ inv.invoice_date or '-' }}</td>
+          <td class="clickable invoice-main-cell" onclick="location.href='/list/{{ inv.id }}'"><strong>{{ inv.seller_name or '未知销售方' }}</strong><span>{{ inv.invoice_number or '暂无发票号码' }}</span><small>{{ inv.buyer_name or '未填写购买方' }}</small></td>
+          <td class="clickable invoice-main-cell" onclick="location.href='/list/{{ inv.id }}'"><strong>{{ inv.commodity_name or '未填写项目' }}</strong><span>{{ inv.category or '未分类' }}</span></td>
+          <td class="money clickable amount-cell" onclick="location.href='/list/{{ inv.id }}'"><strong>{{ "¥%.2f" | format(inv.amount_with_tax or 0) }}</strong><span>税额 ¥{{ "%.2f" | format(inv.tax_amount or 0) }}</span></td>
+          <td class="clickable invoice-main-cell" onclick="location.href='/list/{{ inv.id }}'"><strong>{{ inv.belong_project or '未分配项目' }}</strong><span>{{ inv.belong_person or '未分配归属人' }}</span></td>
+          <td class="center clickable" onclick="location.href='/list/{{ inv.id }}'"><span class="tag {{ 'tag-danger' if excluded else 'tag-success' }}">{{ {'pending':'待确认', 'ready':'可报销', 'excluded':'已排除', 'reported':'已报销'}.get(inv.status, inv.status) }}</span></td>
           <td class="tag-cell clickable" onclick="location.href='/list/{{ inv.id }}'">
             {% set inv_tags = invoice_tags.get(inv.id, []) %}
             {% for t in inv_tags[:3] %}
@@ -85,11 +102,13 @@
             {% endif %}
           </td>
           <td class="action-cell">
+            {% if inv.status in ('ready', 'excluded') %}
             <form method="POST" action="/list/{{ inv.id }}/toggle" style="display:inline;" title="{{ '恢复为正常' if excluded else '标记为排除' }}">
               <button type="submit" class="btn-icon" style="color: {{ '#991b1b' if not excluded else '#166534' }};">
                 {{ '⊘' if not excluded else '✓' }}
               </button>
             </form>
+            {% endif %}
             <form method="POST" action="/list/{{ inv.id }}/delete" style="display:inline;" title="删除" onsubmit="return confirm('确认删除 #{{ inv.id }}？')">
               <button type="submit" class="btn-icon danger">✕</button>
             </form>
@@ -109,6 +128,7 @@
     
     <button type="submit" formaction="/list/batch-toggle?action=exclude" class="btn btn-outline btn-sm" onclick="return fillBatchIds(this)">标记排除</button>
     <button type="submit" formaction="/list/batch-toggle?action=include" class="btn btn-outline btn-sm" onclick="return fillBatchIds(this)">恢复正常</button>
+    <button type="submit" formaction="/list/batch-toggle?action=confirm" class="btn btn-outline btn-sm" onclick="return fillBatchIds(this)">确认发票</button>
     <button type="submit" formaction="/list/batch-delete" class="btn btn-danger btn-sm" onclick="return fillBatchIds(this) && confirm('确认批量删除选中的发票？')">批量删除</button>
     
     <span class="batch-assign-popup">
@@ -177,9 +197,15 @@ function getSelectedIds() {
 }
 
 function fillBatchIds(btn) {
-  const ids = getSelectedIds();
+  const checked = Array.from(document.querySelectorAll('#invoice-table .row-checkbox:checked'));
+  const action = btn.getAttribute('formaction') || '';
+  let selected = checked;
+  if (action.includes('action=confirm')) selected = checked.filter(cb => cb.dataset.status === 'pending');
+  if (action.includes('action=include')) selected = checked.filter(cb => cb.dataset.status === 'excluded');
+  if (action.includes('action=exclude')) selected = checked.filter(cb => cb.dataset.status === 'ready');
+  const ids = selected.map(cb => cb.value);
   if (ids.length === 0) {
-    alert('请先选择发票');
+    alert('所选发票中没有适用于该操作的状态');
     return false;
   }
   // Create or update hidden ids inputs in the form
@@ -207,7 +233,8 @@ function clearSelection() {
 // Update export link when selection changes
 document.addEventListener('change', function(e) {
   if (e.target.classList.contains('row-checkbox') || e.target.id === 'select-all') {
-    const ids = getSelectedIds();
+    const ids = Array.from(document.querySelectorAll('#invoice-table .row-checkbox:checked'))
+      .filter(cb => cb.dataset.status === 'ready').map(cb => cb.value);
     const exportLink = document.getElementById('batch-export-link');
     if (ids.length > 0) {
       exportLink.href = '/export?ids=' + ids.join(',');
@@ -280,7 +307,7 @@ document.addEventListener('change', function(e) {
   <div class="empty-state">
     <p>暂无发票记录</p>
     <p style="margin-top: 8px; font-size: 13px;">
-      <a href="/scan" style="color: #3ba6f1;">扫描上传</a> 第一张发票
+      <a href="/inbox" style="color: #3ba6f1;">导入</a> 第一张发票
     </p>
   </div>
 </div>

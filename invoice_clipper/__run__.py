@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-发票夹子 Web UI — 启动入口（v3.3.2）
+发票夹子 Web UI — 启动入口（v3.4.0）
 
 用法：
     python -m invoice_clipper.__run__            # 正常启动（带进程锁）

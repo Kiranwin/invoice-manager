@@ -7,25 +7,43 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-  <header class="top-nav">
-    <div class="brand">发票<span>夹子</span></div>
-    <nav>
-      <a href="/scan"  class="{{ 'active' if page == 'scan' else '' }}">扫描发票</a>
-      <a href="/list"  class="{{ 'active' if page == 'list' else '' }}">发票列表</a>
-      <a href="/query" class="{{ 'active' if page == 'query' else '' }}">查询筛选</a>
-      <a href="/tags" class="{{ 'active' if page == 'tags' else '' }}">标签管理</a>
-      <a href="/match-amount" class="{{ 'active' if page == 'match_amount' else '' }}">智能凑票</a>
-      <a href="/assignments" class="{{ 'active' if page == 'assignments' else '' }}">归属管理</a>
-      <a href="/export" class="{{ 'active' if page == 'export' else '' }}">导出报销</a>
-    </nav>
-    <span class="nav-version">v3.3.2</span>
-  </header>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand-lockup" href="/inbox">
+        <span class="brand-mark">票</span>
+        <span class="brand-copy"><strong>发票夹子</strong><small>Invoice workspace</small></span>
+      </a>
 
-  <main class="content">
-    {% if message %}
-    <div class="flash {{ msg_type }}">{{ message }}</div>
-    {% endif %}
-    {% block content %}{% endblock %}
-  </main>
+      <div class="sidebar-label">工作区</div>
+      <nav class="side-nav">
+        <a href="/inbox" class="{{ 'active' if page == 'inbox' else '' }}"><span class="nav-icon">⌂</span><span>收件箱</span>{% if page == 'inbox' %}<span class="nav-dot"></span>{% endif %}</a>
+        <a href="/list" class="{{ 'active' if page == 'list' else '' }}"><span class="nav-icon">▤</span><span>发票库</span>{% if page == 'list' %}<span class="nav-dot"></span>{% endif %}</a>
+        <a href="/export" class="{{ 'active' if page == 'export' else '' }}"><span class="nav-icon">↗</span><span>报销单</span>{% if page == 'export' %}<span class="nav-dot"></span>{% endif %}</a>
+      </nav>
+
+      <div class="sidebar-label sidebar-label-spaced">管理</div>
+      <nav class="side-nav">
+        <a href="/settings" class="{{ 'active' if page == 'settings' else '' }}"><span class="nav-icon">⚙</span><span>设置</span>{% if page == 'settings' %}<span class="nav-dot"></span>{% endif %}</a>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="local-status"><span class="status-led"></span><span>本地数据已连接</span></div>
+        <span class="nav-version">v3.4.0</span>
+      </div>
+    </aside>
+
+    <div class="app-main">
+      <header class="mobile-topbar">
+        <a class="mobile-brand" href="/inbox"><span class="brand-mark">票</span><strong>发票夹子</strong></a>
+        <a href="/settings" class="mobile-settings">⚙</a>
+      </header>
+      <main class="content">
+        {% if message %}
+        <div class="flash {{ msg_type }}"><span class="flash-mark">{{ '✓' if msg_type == 'success' else '!' }}</span><span>{{ message }}</span></div>
+        {% endif %}
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+  </div>
 </body>
 </html>

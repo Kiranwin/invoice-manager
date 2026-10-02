@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""发票夹子 Web UI — FastAPI + Jinja2 (v3.3.2)"""
+"""发票夹子 Web UI — FastAPI + Jinja2 (v3.4.0)"""
 import re
 import json
 import shutil
@@ -23,7 +23,7 @@ from invoice_clipper import (
     get_projects, add_project, delete_project,
     get_persons, add_person, delete_person,
     get_tags, add_tag, delete_tag, get_invoice_tags, set_invoice_tags,
-    get_all_invoice_tags, get_invoices_by_ids,
+    get_all_invoice_tags, get_invoices_by_ids, search_invoices_by_tags,
     InvoiceProcessor, export_excel, export_merged_pdf, build_export_label,
     export_zip_sources,
     build_attachment_path, next_attachment_seq,
@@ -31,6 +31,11 @@ from invoice_clipper import (
 from contextlib import asynccontextmanager
 
 from invoice_clipper.mcp_server import mcp as mcp_server
+from invoice_clipper.workflow import (
+    change_invoice_state, delete_invoice_with_files, reimbursable_invoices,
+    record_reimbursement, list_reimbursements, amount_cents,
+    record_import_failure, list_import_failures, retry_import_failure,
+)
 
 # 包内资源路径（安装后模板/静态文件在包目录内）
 PKG_DIR = Path(__file__).parent
@@ -50,7 +55,7 @@ async def _lifespan(app: FastAPI):
         yield  # 应用运行中
 
 
-app = FastAPI(title="发票夹子", version="3.3.2", lifespan=_lifespan)
+app = FastAPI(title="发票夹子", version="3.4.0", lifespan=_lifespan)
 app.mount("/static", StaticFiles(directory=str(PKG_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(PKG_DIR / "templates"))
 
@@ -128,23 +133,31 @@ def serve_attachment(att_id: int):
 
 @app.get("/")
 def root():
-    return RedirectResponse("/list", status_code=303)
+    return RedirectResponse("/inbox", status_code=303)
 
 
-@app.get("/scan")
-def get_scan(request: Request):
+def _pending_invoices() -> list[dict]:
+    """Return invoices that still need a human confirmation."""
+    return [i for i in get_all_invoices() if i.get("status") == "pending"]
+
+
+@app.get("/inbox")
+def get_inbox(request: Request):
+    """Unified inbox: upload new files and review newly recognized invoices."""
     ctx = get_flash(request)
     ctx.update({
-        "page": "scan",
+        "page": "inbox",
         "results": None,
         "summary": None,
+        "pending_invoices": _pending_invoices(),
+        "failures": list_import_failures(),
         "projects": get_projects(),
         "persons": get_persons(),
     })
     return templates.TemplateResponse(request, "scan.html", ctx)
 
 
-@app.post("/scan")
+@app.post("/inbox")
 async def post_scan(request: Request, files: list[UploadFile] = File(...)):
     cfg = request.app.state.config
     form = await request.form()
@@ -155,63 +168,86 @@ async def post_scan(request: Request, files: list[UploadFile] = File(...)):
     results = []
 
     for f in files:
-        safe_name = f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{f.filename or 'upload'}"
-        tmp = Path(tempfile.gettempdir()) / safe_name
-        content = await f.read()
+        suffix = Path(f.filename or "").suffix.lower()
+        if suffix not in {".pdf", ".ofd", ".png", ".jpg", ".jpeg", ".bmp", ".tiff"}:
+            results.append({"id": "?", "filename": f.filename or "-", "ok": False,
+                            "error": "不支持的文件类型", "invoice_number": "-", "invoice_date": "-",
+                            "seller_name": "-", "amount_with_tax": 0,
+                            "belong_project": "", "belong_person": ""})
+            continue
+        failed_dir = Path(cfg["storage"]["base_dir"]).expanduser() / "failed_imports"
+        failed_dir.mkdir(parents=True, exist_ok=True)
+        tmp = failed_dir / f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}{suffix}"
         with open(tmp, "wb") as fp:
-            fp.write(content)
-
-        r = proc.process_file(tmp, source="web")
-        # 写入归属信息
-        if r and (belong_project or belong_person):
-            updates = {}
-            if belong_project:
-                updates["belong_project"] = belong_project
-            if belong_person:
-                updates["belong_person"] = belong_person
-            update_invoice(r["id"], updates)
-            r.update(updates)
-
-        results.append({
-            "id": r.get("id", "?") if r else "?",
-            "filename": f.filename or "-",
-            "ok": r is not None,
-            "error": proc._error if not r else None,
-            "invoice_number": r.get("invoice_number", "-") if r else "-",
-            "invoice_date": r.get("invoice_date", "-") if r else "-",
-            "seller_name": r.get("seller_name", "-") if r else "-",
-            "amount_with_tax": r.get("amount_with_tax", 0) if r else 0,
-            "belong_project": belong_project or "",
-            "belong_person": belong_person or "",
-        })
-        if tmp.exists():
-            tmp.unlink()
+            shutil.copyfileobj(f.file, fp)
+        r = None
+        try:
+            r = proc.process_file(tmp, source="web")
+            if r and (belong_project or belong_person):
+                updates = {}
+                if belong_project:
+                    updates["belong_project"] = belong_project
+                if belong_person:
+                    updates["belong_person"] = belong_person
+                update_invoice(r["id"], updates)
+                r.update(updates)
+            if r is None:
+                record_import_failure(f.filename or tmp.name, tmp, proc._error or "识别失败")
+            results.append({
+                "id": r.get("id", "?") if r else "?",
+                "filename": f.filename or "-",
+                "ok": r is not None,
+                "error": proc._error if not r else None,
+                "invoice_number": r.get("invoice_number", "-") if r else "-",
+                "invoice_date": r.get("invoice_date", "-") if r else "-",
+                "seller_name": r.get("seller_name", "-") if r else "-",
+                "amount_with_tax": r.get("amount_with_tax", 0) if r else 0,
+                "belong_project": belong_project or "",
+                "belong_person": belong_person or "",
+            })
+        finally:
+            if r is not None:
+                tmp.unlink(missing_ok=True)
 
     ok_count = sum(1 for r in results if r["ok"])
     ctx = get_flash(request)
     ctx.update({
-        "page": "scan",
+        "page": "inbox",
         "results": results,
         "summary": {"ok_count": ok_count, "total_count": len(results)},
+        "pending_invoices": _pending_invoices(),
+        "failures": list_import_failures(),
         "projects": get_projects(),
         "persons": get_persons(),
     })
     return templates.TemplateResponse(request, "scan.html", ctx)
 
 
+@app.post("/inbox/failures/{failure_id}/retry")
+def retry_failed_import(request: Request, failure_id: int):
+    try:
+        result = retry_import_failure(request.app.state.config, failure_id)
+    except ValueError as exc:
+        return flash_redirect("/inbox", str(exc), "warning")
+    if result:
+        return flash_redirect("/inbox", "重试成功，请核对发票")
+    return flash_redirect("/inbox", "重试仍未识别成功，请检查识别引擎配置或文件内容", "warning")
+
+
 @app.get("/list")
-def get_list(request: Request, search: str = "", status: list[str] = Query(default=["正常"])):
-    invoices = get_all_invoices()
+def get_list(request: Request, search: str = "", status: list[str] = Query(default=["待确认", "正常"])):
+    filters = build_filters(request)
+    filters["only_included"] = False
+    invoices = query_invoices(filters) if any(k != "only_included" for k in filters) else get_all_invoices()
+    tag_id = request.query_params.get("tag_id", "")
+    if tag_id.isdigit():
+        tagged_ids = {i["id"] for i in search_invoices_by_tags([int(tag_id)])}
+        invoices = [i for i in invoices if i["id"] in tagged_ids]
     invoices.sort(key=lambda i: i.get("invoice_date") or "", reverse=True)
 
-    show_normal = "正常" in status
-    show_excluded = "排除" in status
-    if show_normal and not show_excluded:
-        invoices = [i for i in invoices if not i.get("excluded")]
-    elif show_excluded and not show_normal:
-        invoices = [i for i in invoices if i.get("excluded")]
-    elif not show_normal and not show_excluded:
-        invoices = []
+    state_names = {"待确认": "pending", "正常": "ready", "排除": "excluded", "已报销": "reported"}
+    selected_states = {state_names[name] for name in status if name in state_names}
+    invoices = [i for i in invoices if i.get("status") in selected_states]
 
     search_lower = search.strip().lower()
     if search_lower:
@@ -225,9 +261,11 @@ def get_list(request: Request, search: str = "", status: list[str] = Query(defau
 
     all_invs = get_all_invoices()
     total = len(all_invs)
-    ok = sum(1 for i in all_invs if not i.get("excluded"))
-    excluded = total - ok
-    reimbursable = sum(i.get("amount_with_tax") or 0 for i in all_invs if not i.get("excluded"))
+    ok = sum(1 for i in all_invs if i.get("status") == "ready")
+    excluded = sum(1 for i in all_invs if i.get("status") == "excluded")
+    pending = sum(1 for i in all_invs if i.get("status") == "pending")
+    reported = sum(1 for i in all_invs if i.get("status") == "reported")
+    reimbursable = sum(i.get("amount_with_tax") or 0 for i in all_invs if i.get("status") == "ready")
     total_amount = sum(i.get("amount_with_tax") or 0 for i in all_invs)
 
     ctx = get_flash(request)
@@ -235,141 +273,126 @@ def get_list(request: Request, search: str = "", status: list[str] = Query(defau
         "page": "list",
         "invoices": invoices,
         "search": search, "status_filter": status,
+        "filters": {key: request.query_params.get(key, "") for key in
+                    ("date_from", "date_to", "seller", "buyer", "project", "person")},
+        "tag_id": tag_id,
         "all_tags": get_tags(),
         "invoice_tags": get_all_invoice_tags(),
         "projects": get_projects(),
         "persons": get_persons(),
         "stats": {
             "total": total, "ok_count": ok, "excluded_count": excluded,
+            "pending_count": pending, "reported_count": reported,
             "reimbursable_amount": reimbursable, "total_amount": total_amount,
         },
     })
     return templates.TemplateResponse(request, "list.html", ctx)
 
 
+@app.get("/settings")
+def get_settings(request: Request):
+    ctx = get_flash(request)
+    ctx.update({
+        "page": "settings",
+        "projects": get_projects(),
+        "persons": get_persons(),
+        "tags": get_tags(),
+    })
+    return templates.TemplateResponse(request, "settings.html", ctx)
+
+
 # ── 归属管理 ────────────────────────────────────────
 
 
-@app.get("/assignments")
-def get_assignments(request: Request):
-    ctx = get_flash(request)
-    ctx.update({
-        "page": "assignments",
-        "projects": get_projects(),
-        "persons": get_persons(),
-    })
-    return templates.TemplateResponse(request, "assignments.html", ctx)
-
-
-@app.post("/assignments/project")
+@app.post("/settings/projects")
 def add_assignment_project(request: Request, name: str = Form(...)):
     name = name.strip()
     if not name:
-        return flash_redirect("/assignments", "项目名称不能为空", "warning")
+        return flash_redirect("/settings", "项目名称不能为空", "warning")
     try:
         add_project(name)
-        return flash_redirect("/assignments", f"归属项目「{name}」已创建")
+        return flash_redirect("/settings", f"归属项目「{name}」已创建")
     except Exception as e:
-        return flash_redirect("/assignments", f"创建失败: {e}", "error")
+        return flash_redirect("/settings", f"创建失败: {e}", "error")
 
 
-@app.post("/assignments/project/{project_id}/delete")
+@app.post("/settings/projects/{project_id}/delete")
 def delete_assignment_project(project_id: int):
     ok = delete_project(project_id)
     if ok:
-        return flash_redirect("/assignments", "归属项目已删除")
-    return flash_redirect("/assignments", "该项目已被发票引用，无法删除", "warning")
+        return flash_redirect("/settings", "归属项目已删除")
+    return flash_redirect("/settings", "该项目已被发票引用，无法删除", "warning")
 
 
-@app.post("/assignments/person")
+@app.post("/settings/persons")
 def add_assignment_person(request: Request, name: str = Form(...)):
     name = name.strip()
     if not name:
-        return flash_redirect("/assignments", "归属人名称不能为空", "warning")
+        return flash_redirect("/settings", "归属人名称不能为空", "warning")
     try:
         add_person(name)
-        return flash_redirect("/assignments", f"归属人「{name}」已创建")
+        return flash_redirect("/settings", f"归属人「{name}」已创建")
     except Exception as e:
-        return flash_redirect("/assignments", f"创建失败: {e}", "error")
+        return flash_redirect("/settings", f"创建失败: {e}", "error")
 
 
-@app.post("/assignments/person/{person_id}/delete")
+@app.post("/settings/persons/{person_id}/delete")
 def delete_assignment_person(person_id: int):
     ok = delete_person(person_id)
     if ok:
-        return flash_redirect("/assignments", "归属人已删除")
-    return flash_redirect("/assignments", "该归属人已被发票引用，无法删除", "warning")
+        return flash_redirect("/settings", "归属人已删除")
+    return flash_redirect("/settings", "该归属人已被发票引用，无法删除", "warning")
 
 
 # ── 标签管理 ────────────────────────────────────────
 
 
-@app.get("/tags")
-def get_tags_page(request: Request):
-    ctx = get_flash(request)
-    ctx.update({
-        "page": "tags",
-        "tags": get_tags(),
-    })
-    return templates.TemplateResponse(request, "tags.html", ctx)
-
-
-@app.post("/tags")
+@app.post("/settings/tags")
 def add_tag_route(request: Request, name: str = Form(...), color: str = Form("#3b82f6")):
     name = name.strip()
     if not name:
-        return flash_redirect("/tags", "标签名称不能为空", "warning")
+        return flash_redirect("/settings", "标签名称不能为空", "warning")
     try:
         add_tag(name, color)
-        return flash_redirect("/tags", f"标签「{name}」已创建")
+        return flash_redirect("/settings", f"标签「{name}」已创建")
     except Exception as e:
-        return flash_redirect("/tags", f"创建失败: {e}", "error")
+        return flash_redirect("/settings", f"创建失败: {e}", "error")
 
 
-@app.post("/tags/{tag_id}/delete")
+@app.post("/settings/tags/{tag_id}/delete")
 def delete_tag_route(tag_id: int):
     ok = delete_tag(tag_id)
     if ok:
-        return flash_redirect("/tags", "标签已删除")
-    return flash_redirect("/tags", "删除失败", "error")
+        return flash_redirect("/settings", "标签已删除")
+    return flash_redirect("/settings", "删除失败", "error")
 
 
 @app.post("/list/batch-toggle")
 def batch_toggle(request: Request, ids: list[int] = Form(...), action: str = Query(...)):
-    cfg = request.app.state.config
-    excluded = action == "exclude"
+    if action not in {"exclude", "include", "confirm"}:
+        raise HTTPException(400, "无效操作")
+    target = "excluded" if action == "exclude" else "ready"
+    updated = 0
     for inv_id in ids:
-        update_invoice_status(inv_id, excluded=excluded)
-    label = "已排除" if excluded else "已恢复"
-    return flash_redirect("/list", f"批量操作完成: {len(ids)} 张发票{label}")
+        try:
+            change_invoice_state(inv_id, target)
+            updated += 1
+        except ValueError as exc:
+            return flash_redirect("/list", f"已更新 {updated} 张；{exc}", "warning")
+    label = "已排除" if action == "exclude" else "已确认" if action == "confirm" else "已恢复"
+    return flash_redirect("/list", f"批量操作完成: {updated} 张发票{label}")
 
 
 @app.post("/list/batch-delete")
 def batch_delete(request: Request, ids: list[int] = Form(...)):
     """批量删除发票"""
-    cfg = request.app.state.config
     deleted = 0
     for inv_id in ids:
-        inv = get_invoice_by_id(inv_id)
-        if not inv:
-            continue
-        for att in get_attachments(inv_id):
-            p = Path(att["stored_path"])
-            if p.exists():
-                p.unlink()
-        stored = inv.get("stored_path")
-        if stored:
-            p = Path(stored)
-            if p.exists():
-                p.unlink()
-            parent = p.parent
-            try:
-                if parent.exists() and not any(parent.iterdir()):
-                    parent.rmdir()
-            except OSError:
-                pass
-        delete_invoice(inv_id)
-        deleted += 1
+        try:
+            if delete_invoice_with_files(inv_id):
+                deleted += 1
+        except ValueError as exc:
+            return flash_redirect("/list", f"已删除 {deleted} 张；{exc}", "warning")
     return flash_redirect("/list", f"批量删除完成: 已删除 {deleted} 张发票")
 
 
@@ -453,37 +476,35 @@ def toggle_status(request: Request, inv_id: int):
     inv = get_invoice_by_id(inv_id)
     if not inv:
         raise HTTPException(404)
+    if inv.get("status") == "reported":
+        return flash_redirect(f"/list/{inv_id}", "已报销发票不能直接改为可报销", "warning")
+    if inv.get("status") == "pending":
+        return flash_redirect(f"/list/{inv_id}", "请先核对并确认发票", "warning")
     new_status = not inv.get("excluded")
-    update_invoice_status(inv_id, excluded=new_status)
+    change_invoice_state(inv_id, "excluded" if new_status else "ready")
     label = "已排除" if new_status else "已恢复"
     return flash_redirect(f"/list/{inv_id}", f"发票 #{inv_id} {label}")
 
 
+@app.post("/list/{inv_id}/confirm")
+def confirm_invoice(inv_id: int):
+    try:
+        change_invoice_state(inv_id, "ready")
+    except ValueError as exc:
+        return flash_redirect(f"/list/{inv_id}", str(exc), "warning")
+    return flash_redirect(f"/list/{inv_id}", "发票已确认，可用于报销")
+
+
 @app.post("/list/{inv_id}/delete")
 def delete_invoice_route(request: Request, inv_id: int):
-    cfg = request.app.state.config
     inv = get_invoice_by_id(inv_id)
     if not inv:
         raise HTTPException(404)
 
-    for att in get_attachments(inv_id):
-        p = Path(att["stored_path"])
-        if p.exists():
-            p.unlink()
-
-    stored = inv.get("stored_path")
-    if stored:
-        p = Path(stored)
-        if p.exists():
-            p.unlink()
-        parent = p.parent
-        try:
-            if parent.exists() and not any(parent.iterdir()):
-                parent.rmdir()
-        except OSError:
-            pass
-
-    delete_invoice(inv_id)
+    try:
+        delete_invoice_with_files(inv_id)
+    except ValueError as exc:
+        return flash_redirect(f"/list/{inv_id}", str(exc), "warning")
     return flash_redirect("/list", f"发票 #{inv_id} 已删除")
 
 
@@ -539,59 +560,6 @@ def delete_attachment_route(request: Request, inv_id: int, att_id: int):
     return flash_redirect(f"/list/{inv_id}", "附件已删除")
 
 
-@app.get("/query")
-def get_query(request: Request):
-    cfg = request.app.state.config
-    filters = build_filters(request)
-    if request.query_params.get("only_included"):
-        filters["only_included"] = True
-
-    results = None
-    total_amount = 0.0
-
-    # Handle tag filtering
-    tag_ids_param = request.query_params.get("tag_ids", "")
-    if tag_ids_param and tag_ids_param.strip():
-        tag_ids = [int(x) for x in tag_ids_param.split(",") if x.strip().isdigit()]
-        # Get invoice IDs matching those tags
-        tag_invoices = search_invoices_by_tags(tag_ids)
-        tag_inv_ids = [i["id"] for i in tag_invoices]
-        # Apply additional filters on top of tag filter
-        if filters:
-            filters["exclude_ids"] = [i for i in range(-1)]  # dummy - we'll merge differently
-            # We need to get base filters then intersect
-            base_results = query_invoices(filters)
-            base_ids = {r["id"] for r in base_results}
-            tag_ids_set = set(tag_inv_ids)
-            intersection = base_ids & tag_ids_set
-            results = [r for r in base_results if r["id"] in intersection]
-        else:
-            results = tag_invoices
-        total_amount = sum(r.get("amount_with_tax") or 0 for r in results)
-    elif filters:
-        results = query_invoices(filters)
-        total_amount = sum(r.get("amount_with_tax") or 0 for r in results)
-
-    ctx = get_flash(request)
-    ctx.update({
-        "page": "query",
-        "results": results,
-        "total_amount": total_amount,
-        "all_tags": get_tags(),
-        "filters": {
-            "date_from": request.query_params.get("date_from", ""),
-            "date_to": request.query_params.get("date_to", ""),
-            "seller": request.query_params.get("seller", ""),
-            "buyer": request.query_params.get("buyer", ""),
-            "project": request.query_params.get("project", ""),
-            "person": request.query_params.get("person", ""),
-            "only_included": request.query_params.get("only_included", ""),
-            "tag_ids": request.query_params.get("tag_ids", ""),
-        },
-    })
-    return templates.TemplateResponse(request, "query.html", ctx)
-
-
 # ── Attachment ZIP export helper ────────────────
 
 
@@ -611,17 +579,29 @@ def _export_attachments_zip(invoices: list, zip_path: Path, cfg: dict):
                     zf.write(str(fp), arcname)
 
 
+def _export_dir(cfg: dict) -> Path:
+    configured = cfg.get("storage", {}).get("export_dir")
+    return Path(configured).expanduser() if configured else Path.home() / "Documents" / "发票夹子" / "exports"
+
+
 @app.get("/export")
 def get_export(request: Request):
     ctx = get_flash(request)
-    
+
     # Handle pre-selected invoice IDs from list page
     selected_ids_param = request.query_params.get("ids", "")
     selected_invoices = []
+    invalid_selection = False
     if selected_ids_param:
         ids_list = [int(x) for x in selected_ids_param.split(",") if x.strip().isdigit()]
         if ids_list:
-            selected_invoices = get_invoices_by_ids(ids_list)
+            selected_invoices = [i for i in get_invoices_by_ids(ids_list) if i.get("status") == "ready"]
+            invalid_selection = len(selected_invoices) != len(set(ids_list))
+            selected_ids_param = ",".join(str(i["id"]) for i in selected_invoices)
+        else:
+            invalid_selection = True
+    if invalid_selection:
+        ctx.update({"message": "部分发票不可报销，请重新从发票库选择", "msg_type": "warning"})
 
     ctx.update({
         "page": "export",
@@ -630,6 +610,11 @@ def get_export(request: Request):
         "download_links": None, "invoice_count": None, "total_amount": 0.0,
         "selected_invoices": selected_invoices,
         "selected_ids": selected_ids_param,
+        "history": list_reimbursements(),
+        "target_amount": "",
+        "max_count": 0,
+        "candidates": None,
+        "match_filters": {},
     })
     return templates.TemplateResponse(request, "export.html", ctx)
 
@@ -641,21 +626,23 @@ async def post_export(request: Request):
 
     # Determine invoice selection mode
     selected_ids_str = form.get("selected_ids", "").strip()
+    filters = {}
     if selected_ids_str:
         # Selected-invoice mode: get by IDs
         ids_list = [int(x) for x in selected_ids_str.split(",") if x.strip().isdigit()]
         invoices = get_invoices_by_ids(ids_list)
+        if len(invoices) != len(set(ids_list)) or any(i.get("status") != "ready" for i in invoices):
+            return flash_redirect("/export", "选中的发票包含待确认、已排除或已报销项", "warning")
     else:
         # Filter mode (existing): build filters from form
-        filters = {}
         for key in ("date_from", "date_to", "seller", "buyer", "project", "person"):
             val = form.get(key, "").strip()
             if val:
                 filters[key] = val
         filters["only_included"] = True
-        invoices = query_invoices(filters) if filters else []
+        invoices = reimbursable_invoices(filters)
 
-    total_amount = sum(i.get("amount_with_tax") or 0 for i in invoices)
+    total_amount = sum(amount_cents(i.get("amount_with_tax")) for i in invoices) / 100
     if not invoices:
         return flash_redirect("/export", "没有符合条件的发票", "warning")
 
@@ -663,9 +650,10 @@ async def post_export(request: Request):
     export_mode = form.get("export_mode", "invoice_only")  # invoice_only | with_attachments
     package_mode = form.get("package_mode", "merged_pdf")  # merged_pdf | source_zip | both
 
-    export_dir = Path.home() / "Documents" / "发票夹子" / "exports"
+    export_dir = _export_dir(cfg)
     export_dir.mkdir(parents=True, exist_ok=True)
     label = build_export_label(form) if not selected_ids_str else f"选中{len(invoices)}张"
+    label = f"{label}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
     download_links = []
 
     try:
@@ -705,12 +693,14 @@ async def post_export(request: Request):
     except Exception as e:
         return flash_redirect("/export", f"导出失败: {e}", "error")
 
-    # 导出后标记为已报销（复用 excluded 字段：已报销的发票不再参与下次凑票与导出）
-    marked_count = 0
-    if form.get("mark_reported"):
-        for inv in invoices:
-            update_invoice_status(inv["id"], excluded=True)
-            marked_count += 1
+    try:
+        batch_id = record_reimbursement(
+            invoices, [export_dir / link["filename"] for link in download_links],
+            mark_reported=bool(form.get("mark_reported")),
+        )
+    except ValueError as exc:
+        return flash_redirect("/export", str(exc), "warning")
+    marked_count = len(invoices) if form.get("mark_reported") else 0
 
     ctx = get_flash(request)
     ctx.update({
@@ -722,13 +712,19 @@ async def post_export(request: Request):
         "selected_ids": selected_ids_str,
         "selected_invoices": invoices if selected_ids_str else [],
         "marked_count": marked_count,
+        "batch_id": batch_id,
+        "history": list_reimbursements(),
+        "target_amount": "",
+        "max_count": 0,
+        "candidates": None,
+        "match_filters": {},
     })
     return templates.TemplateResponse(request, "export.html", ctx)
 
 
 @app.get("/export/download/{filename}")
-def download_export(filename: str):
-    export_dir = Path.home() / "Documents" / "发票夹子" / "exports"
+def download_export(request: Request, filename: str):
+    export_dir = _export_dir(request.app.state.config)
     filepath = export_dir / filename
     if not filepath.resolve().is_relative_to(export_dir.resolve()):
         raise HTTPException(404)
@@ -742,20 +738,7 @@ def download_export(filename: str):
 # ── 智能凑票 ────────────────────────────────────────
 
 
-@app.get("/match-amount")
-def get_match_amount(request: Request):
-    ctx = get_flash(request)
-    ctx.update({
-        "page": "match_amount",
-        "target_amount": "",
-        "max_count": 0,
-        "candidates": None,
-        "filters": {},
-    })
-    return templates.TemplateResponse(request, "match_amount.html", ctx)
-
-
-@app.post("/match-amount")
+@app.post("/export/match")
 async def post_match_amount(request: Request):
     cfg = request.app.state.config
     form = await request.form()
@@ -763,10 +746,10 @@ async def post_match_amount(request: Request):
     try:
         target_amount = float(form.get("target_amount", 0))
     except (ValueError, TypeError):
-        return flash_redirect("/match-amount", "请输入有效金额", "warning")
+        return flash_redirect("/export", "请输入有效金额", "warning")
 
     if target_amount <= 0:
-        return flash_redirect("/match-amount", "目标金额必须大于0", "warning")
+        return flash_redirect("/export", "目标金额必须大于0", "warning")
 
     try:
         max_count = int(form.get("max_count", 0))
@@ -786,24 +769,23 @@ async def post_match_amount(request: Request):
 
     # Get candidate invoices
     from invoice_clipper.matcher import find_multiple_candidates
-    candidates_raw = query_invoices(filters)
+    candidates_raw = reimbursable_invoices(filters)
     
     total_available = sum(i.get("amount_with_tax") or 0 for i in candidates_raw)
 
     # Run matching algorithm
     candidates = find_multiple_candidates(candidates_raw, target_amount, count=3, max_count=max_count)
 
-    ctx = get_flash(request)
-    ctx.update({
-        "page": "match_amount",
+    response = get_export(request)
+    response.context.update({
         "target_amount": target_amount,
         "max_count": max_count,
         "candidates": candidates,
         "total_candidates": len(candidates_raw),
         "total_available": total_available,
-        "filters": filters,
+        "match_filters": filters,
     })
-    return templates.TemplateResponse(request, "match_amount.html", ctx)
+    return templates.TemplateResponse(request, "export.html", response.context)
 
 
 # ── Web 启动器（供 invoice-manager-web 命令使用）─
@@ -815,7 +797,7 @@ def main():
     port = int(cfg.get("server", {}).get("port", 8000))
 
     url = f"http://{host}:{port}"
-    print(f"发票夹子 v3.3.2 正在启动 ...")
+    print(f"发票夹子 v3.4.0 正在启动 ...")
     print(f"   配置文件: {cfg_path}")
     print(f"   本地地址: {url}")
 

@@ -149,7 +149,11 @@ class InvoiceProcessor:
 
         # ── 6. 构建记录并入库 ──────────────────────────────
         record = self._build_record(fields, archived, source)
-        invoice_id = insert_invoice(record)
+        try:
+            invoice_id = insert_invoice(record)
+        except Exception:
+            archived.unlink(missing_ok=True)
+            raise
         record["id"] = invoice_id
 
         logger.info(
@@ -214,6 +218,7 @@ class InvoiceProcessor:
             "source": source,
             "original_filename": self._original_filename,
             "stored_path": str(archived_path),
+            "status": "pending",
             "created_at": datetime.now().isoformat(),
             "raw_text": getattr(self, "_raw_text", "")[:2000],
             "raw_json": json.dumps(fields, ensure_ascii=False),
