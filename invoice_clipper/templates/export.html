@@ -20,19 +20,49 @@
       <div class="form-group"><label>归属人</label><input type="text" name="person" value="{{ match_filters.person or '' }}"></div>
       <button type="submit" class="btn btn-primary">生成候选方案</button>
     </div>
+    <div class="req-block" id="req-block">
+      <div class="req-block-header">
+        <span class="req-label">必须包含的发票号码</span>
+        <div class="req-actions">
+          <button type="button" class="btn btn-outline btn-sm" id="req-batch-btn">批量</button>
+          <button type="button" class="btn btn-outline btn-sm" id="req-add-btn">添加</button>
+        </div>
+      </div>
+      <div class="req-rows" id="req-rows"></div>
+      <div class="req-empty-hint" id="req-empty-hint">每个候选方案都会强制包含这些发票。可前往 <a href="/list?status=正常" target="_blank">发票库</a> 复制发票号码。</div>
+      <input type="hidden" name="required_numbers" id="required-numbers-hidden" value="{{ required_numbers or '' }}">
+    </div>
+    {% if required_invoices %}
+    <div class="selected-inv-summary" style="margin-top: 12px;">
+      必选 <strong>{{ required_invoices | length }}</strong> 张 ·
+      合计 <strong>¥{{ "%.2f" | format(required_invoices | sum(attribute='amount_with_tax') or 0) }}</strong> ·
+      {% for inv in required_invoices %}<span class="muted">{{ inv.invoice_number }} {{ inv.seller_name or '' }}</span>{% if not loop.last %}、{% endif %}{% endfor %}
+    </div>
+    {% endif %}
   </form>
+</div>
+
+<div class="req-batch-modal" id="req-batch-modal">
+  <div class="panel">
+    <h4>批量添加必选发票号码</h4>
+    <textarea id="req-batch-textarea" placeholder="每行一个号码，或用逗号 / 空格分隔&#10;例如：&#10;2432200000012345678&#10;2432200000098765432"></textarea>
+    <div class="panel-footer">
+      <button type="button" class="btn btn-outline btn-sm" id="req-batch-cancel">取消</button>
+      <button type="button" class="btn btn-primary btn-sm" id="req-batch-confirm">追加</button>
+    </div>
+  </div>
 </div>
 
 {% if candidates is not none %}
 <div class="card">
   <h3>候选方案</h3>
   {% if candidates %}
-  <p class="muted">{{ total_candidates }} 张可报销发票参与匹配，合计 ¥{{ "%.2f" | format(total_available) }}</p>
+  <p class="muted">{{ total_candidates }} 张可报销发票参与匹配，合计 ¥{{ "%.2f" | format(total_available) }}{% if required_numbers %} · 必选 {{ required_numbers.split(',') | length }} 张{% endif %}</p>
   {% for candidate, subtotal in candidates %}
   <div class="candidate-row">
     <div><strong>方案 {{ loop.index }}</strong> · {{ candidate | length }} 张 · ¥{{ "%.2f" | format(subtotal) }} · 差额 ¥{{ "%.2f" | format(target_amount - subtotal) }}</div>
-    <div class="muted">{% for inv in candidate %}{{ inv.seller_name or inv.invoice_number or ('#' ~ inv.id) }}{% if not loop.last %}、{% endif %}{% endfor %}</div>
-      <a href="/export?ids={% for inv in candidate %}{{ inv.id }}{% if not loop.last %},{% endif %}{% endfor %}#create" class="btn btn-outline btn-sm">用此方案生成报销单</a>
+    <div class="muted">{% for inv in candidate %}<span{% if required_numbers_set and inv.invoice_number in required_numbers_set %} style="font-weight:600;color:#0c0a09;" title="必选"{% endif %}>{{ inv.seller_name or inv.invoice_number or ('#' ~ inv.id) }}{% if required_numbers_set and inv.invoice_number in required_numbers_set %} ★{% endif %}</span>{% if not loop.last %}、{% endif %}{% endfor %}</div>
+      <a href="/export?ids={% for inv in candidate %}{{ inv.id }}{% if not loop.last %},{% endif %}{% endfor %}{% if required_numbers %}&required_numbers={{ required_numbers }}{% endif %}#create" class="btn btn-outline btn-sm">用此方案生成报销单</a>
   </div>
   {% endfor %}
   {% else %}<p class="empty-hint">未找到符合条件的组合，请调整目标金额或筛选条件。</p>{% endif %}
@@ -137,5 +167,124 @@
   {% endfor %}
 </div>
 {% endif %}
+
+<script>
+(function() {
+  const rowsContainer = document.getElementById('req-rows');
+  const hiddenInput = document.getElementById('required-numbers-hidden');
+  const emptyHint = document.getElementById('req-empty-hint');
+  const addBtn = document.getElementById('req-add-btn');
+  const batchBtn = document.getElementById('req-batch-btn');
+  const batchModal = document.getElementById('req-batch-modal');
+  const batchText = document.getElementById('req-batch-textarea');
+  const batchConfirm = document.getElementById('req-batch-confirm');
+  const batchCancel = document.getElementById('req-batch-cancel');
+  const matchForm = document.querySelector('#match form');
+  if (!rowsContainer || !hiddenInput) return;
+
+  // 发票号码为字母数字串，可能含 - 等分隔符；按逗号/空白/中文标点切分
+  function parseNumbers(text) {
+    return (text || '')
+      .split(/[\s,，;；、|]+/)
+      .map(s => s.trim())
+      .filter(s => s.length > 0);
+  }
+
+  function makeRow(value) {
+    const row = document.createElement('div');
+    row.className = 'req-row';
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'req-input';
+    input.placeholder = '发票号码';
+    input.value = value || '';
+    input.addEventListener('input', syncHidden);
+
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'req-del';
+    del.textContent = '−';
+    del.title = '删除此行';
+    del.addEventListener('click', () => {
+      row.remove();
+      syncHidden();
+    });
+
+    row.appendChild(input);
+    row.appendChild(del);
+    return row;
+  }
+
+  function addRow(value) {
+    rowsContainer.appendChild(makeRow(value));
+    syncHidden();
+  }
+
+  function syncHidden() {
+    const nums = [];
+    rowsContainer.querySelectorAll('input.req-input').forEach(inp => {
+      nums.push(...parseNumbers(inp.value));
+    });
+    // 去重保持顺序
+    const seen = new Set();
+    const uniq = [];
+    nums.forEach(n => { if (!seen.has(n)) { seen.add(n); uniq.push(n); } });
+    hiddenInput.value = uniq.join(',');
+    const totalRows = rowsContainer.querySelectorAll('.req-row').length;
+    if (emptyHint) {
+      emptyHint.style.display = totalRows === 0 ? 'block' : 'none';
+    }
+  }
+
+  function initFromHidden() {
+    rowsContainer.innerHTML = '';
+    const v = hiddenInput.value.trim();
+    if (v) {
+      parseNumbers(v).forEach(n => addRow(n));
+    } else {
+      addRow('');
+    }
+    syncHidden();
+  }
+
+  addBtn.addEventListener('click', () => addRow(''));
+
+  batchBtn.addEventListener('click', () => {
+    batchText.value = '';
+    batchModal.classList.add('visible');
+    batchText.focus();
+  });
+
+  batchCancel.addEventListener('click', () => {
+    batchModal.classList.remove('visible');
+  });
+
+  batchModal.addEventListener('click', (e) => {
+    if (e.target === batchModal) batchModal.classList.remove('visible');
+  });
+
+  batchConfirm.addEventListener('click', () => {
+    const nums = parseNumbers(batchText.value);
+    nums.forEach(n => addRow(n));
+    batchModal.classList.remove('visible');
+  });
+
+  batchText.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      batchConfirm.click();
+    }
+    if (e.key === 'Escape') {
+      batchModal.classList.remove('visible');
+    }
+  });
+
+  // 表单提交前同步 hidden 字段
+  matchForm.addEventListener('submit', syncHidden);
+
+  initFromHidden();
+})();
+</script>
 
 {% endblock %}

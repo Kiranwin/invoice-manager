@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""发票夹子 Web UI — FastAPI + Jinja2 (v3.4.0)"""
+"""发票夹子 Web UI — FastAPI + Jinja2 (v3.4.1)"""
 import re
 import json
 import shutil
@@ -56,7 +56,7 @@ async def _lifespan(app: FastAPI):
         yield  # 应用运行中
 
 
-app = FastAPI(title="发票夹子", version="3.4.0", lifespan=_lifespan)
+app = FastAPI(title="发票夹子", version="3.4.1", lifespan=_lifespan)
 app.mount("/static", StaticFiles(directory=str(PKG_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(PKG_DIR / "templates"))
 
@@ -621,6 +621,23 @@ def get_export(request: Request):
     if invalid_selection:
         ctx.update({"message": "部分发票不可报销，请重新从发票库选择", "msg_type": "warning"})
 
+    # Handle required invoice numbers for smart match (manually added)
+    required_numbers_param = request.query_params.get("required_numbers", "")
+    required_invoices: list[dict] = []
+    invalid_required = False
+    if required_numbers_param:
+        nums_list = [n.strip() for n in required_numbers_param.split(",") if n.strip()]
+        if nums_list:
+            nums_set = set(nums_list)
+            pool = reimbursable_invoices()
+            required_invoices = [i for i in pool if i.get("invoice_number") and i["invoice_number"] in nums_set]
+            invalid_required = len(required_invoices) != len(nums_set)
+            required_numbers_param = ",".join(i["invoice_number"] for i in required_invoices)
+        else:
+            invalid_required = True
+    if invalid_required:
+        ctx.update({"message": "部分必选发票号码不可用，请重新从发票库选择", "msg_type": "warning"})
+
     ctx.update({
         "page": "export",
         "filters": {"date_from": "", "date_to": "", "seller": "", "buyer": "",
@@ -628,6 +645,9 @@ def get_export(request: Request):
         "download_links": None, "invoice_count": None, "total_amount": 0.0,
         "selected_invoices": selected_invoices,
         "selected_ids": selected_ids_param,
+        "required_invoices": required_invoices,
+        "required_numbers": required_numbers_param,
+        "required_numbers_set": {i["invoice_number"] for i in required_invoices},
         "history": list_reimbursements(),
         "target_amount": "",
         "max_count": 0,
@@ -729,6 +749,9 @@ async def post_export(request: Request):
         "total_amount": total_amount,
         "selected_ids": selected_ids_str,
         "selected_invoices": invoices if selected_ids_str else [],
+        "required_invoices": [],
+        "required_numbers": "",
+        "required_numbers_set": set(),
         "marked_count": marked_count,
         "batch_id": batch_id,
         "history": list_reimbursements(),
@@ -777,6 +800,20 @@ async def post_match_amount(request: Request):
     if max_count <= 0:
         max_count = 9999
 
+    # 必须包含的发票号码
+    required_numbers_str = form.get("required_numbers", "").strip()
+    required_invoices: list[dict] = []
+    if required_numbers_str:
+        nums_list = [n.strip() for n in required_numbers_str.split(",") if n.strip()]
+        if not nums_list:
+            return flash_redirect("/export", "必选发票号码格式无效", "warning")
+        nums_set = set(nums_list)
+        # 从可报销池中按号码匹配
+        pool = reimbursable_invoices()
+        required_invoices = [i for i in pool if i.get("invoice_number") and i["invoice_number"] in nums_set]
+        if len(required_invoices) != len(nums_set):
+            return flash_redirect("/export", "必选发票号码包含不存在或不可报销的项", "warning")
+
     # Build filters for candidate invoices
     filters = {}
     for key in ("date_from", "date_to", "project", "person"):
@@ -786,13 +823,36 @@ async def post_match_amount(request: Request):
     filters["only_included"] = True  # Only reimbursable invoices
 
     # Get candidate invoices
-    from invoice_clipper.matcher import find_multiple_candidates
+    from invoice_clipper.matcher import (
+        find_multiple_candidates, find_multiple_candidates_with_required,
+    )
     candidates_raw = reimbursable_invoices(filters)
-    
+
     total_available = sum(i.get("amount_with_tax") or 0 for i in candidates_raw)
 
+    # 验证必选发票都在候选池中
+    required_numbers_set = {inv["invoice_number"] for inv in required_invoices}
+    if required_numbers_set:
+        raw_numbers = {i.get("invoice_number") for i in candidates_raw}
+        missing = required_numbers_set - raw_numbers
+        if missing:
+            missing_label = ",".join(missing)
+            return flash_redirect(
+                "/export",
+                f"必选发票号码 {missing_label} 不在当前筛选范围内，请放宽筛选条件",
+                "warning",
+            )
+
     # Run matching algorithm
-    candidates = find_multiple_candidates(candidates_raw, target_amount, count=3, max_count=max_count)
+    if required_invoices:
+        candidates = find_multiple_candidates_with_required(
+            candidates_raw, target_amount, required_invoices,
+            count=3, max_count=max_count,
+        )
+    else:
+        candidates = find_multiple_candidates(
+            candidates_raw, target_amount, count=3, max_count=max_count,
+        )
 
     response = get_export(request)
     response.context.update({
@@ -802,6 +862,9 @@ async def post_match_amount(request: Request):
         "total_candidates": len(candidates_raw),
         "total_available": total_available,
         "match_filters": filters,
+        "required_numbers": required_numbers_str,
+        "required_invoices": required_invoices,
+        "required_numbers_set": required_numbers_set,
     })
     return templates.TemplateResponse(request, "export.html", response.context)
 
@@ -815,7 +878,7 @@ def main():
     port = int(cfg.get("server", {}).get("port", 8000))
 
     url = f"http://{host}:{port}"
-    print(f"发票夹子 v3.4.0 正在启动 ...")
+    print(f"发票夹子 v3.4.1 正在启动 ...")
     print(f"   配置文件: {cfg_path}")
     print(f"   本地地址: {url}")
 

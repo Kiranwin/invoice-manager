@@ -2,7 +2,7 @@
   <img src="https://img.shields.io/badge/Python-3.12+-blue.svg" alt="Python 3.12+">
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License">
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg" alt="Platform">
-  <img src="https://img.shields.io/badge/Version-3.4.0-brightgreen.svg" alt="v3.4.0">
+  <img src="https://img.shields.io/badge/Version-3.4.1-brightgreen.svg" alt="v3.4.1">
 </p>
 
 <h1 align="center">发票夹子 🧾</h1>
@@ -36,7 +36,7 @@
 
 ```bash
 # 从 Wheel 包安装
-pip install dist/invoice_manager-3.4.0-py3-none-any.whl
+pip install dist/invoice_manager-3.4.1-py3-none-any.whl
 ```
 
 ### 启动 Web UI
@@ -169,7 +169,7 @@ MCP Server 暴露以下工具，覆盖发票管理全流程：
 ### Wheel 包（推荐）
 
 ```bash
-pip install dist/invoice_manager-3.4.0-py3-none-any.whl
+pip install dist/invoice_manager-3.4.1-py3-none-any.whl
 ```
 
 安装后可用命令：
@@ -249,7 +249,7 @@ invoice-manager/
 │   ├── __init__.py               # load_config + 所有模块导出
 │   ├── __main__.py               # pip 入口点
 │   ├── __run__.py                # 进程锁启动入口（支持 --debug）
-│   ├── web.py                    # FastAPI Web UI (v3.4.0)
+│   ├── web.py                    # FastAPI Web UI (v3.4.1)
 │   ├── mcp_server.py             # MCP AI Agent 接口
 │   ├── database.py               # 数据库调度层
 │   ├── db_backends.py            # SQLite + PostgreSQL 后端
@@ -275,7 +275,7 @@ invoice-manager/
 │       ├── baidu_ocr.py          # 百度 OCR
 │       └── llm_vision.py         # 大模型视觉
 └── dist/
-    └── invoice_manager-3.4.0-py3-none-any.whl
+    └── invoice_manager-3.4.1-py3-none-any.whl
 ```
 
 ---
@@ -298,6 +298,17 @@ invoice-manager/
 - `easyofd` → OFD 电子发票格式支持
 - `psycopg2-binary` → PostgreSQL 支持
 - `paddlepaddle` + `paddleocr` → 本地离线 OCR
+
+---
+
+## 🎯 v3.4.1 新增功能
+
+| 功能 | 说明 |
+|------|------|
+| 🎯 **智能凑票必选发票** | 凑票时支持手动指定「必须包含」的发票，每套候选方案都会强制包含这些发票并打 ★ 标记 |
+| 🎨 **必选发票动态列表 UI** | 凑票页新增「添加 / 批量」按钮的动态行列表，支持单行输入或批量粘贴发票号码 |
+| 🔗 **发票库一键选为必选** | 发票库批量工具栏新增「选为必选发票」按钮，勾选后跳转凑票页并自动填入号码 |
+| 🧮 **必选发票凑票算法** | 新增 `find_multiple_candidates_with_required` 函数，先扣除必选金额再用剩余池凑剩余目标 |
 
 ---
 

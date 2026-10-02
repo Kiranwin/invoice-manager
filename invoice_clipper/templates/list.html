@@ -86,7 +86,7 @@
         {% for inv in invoices %}
         {% set excluded = inv.status == 'excluded' %}
         <tr class="{{ 'excluded' if excluded else '' }}">
-          <td class="checkbox-cell"><input type="checkbox" class="row-checkbox" value="{{ inv.id }}" data-status="{{ inv.status }}"></td>
+          <td class="checkbox-cell"><input type="checkbox" class="row-checkbox" value="{{ inv.id }}" data-status="{{ inv.status }}" data-invoice-number="{{ inv.invoice_number or '' }}"></td>
           <td class="clickable date-cell" onclick="location.href='/list/{{ inv.id }}'">{{ inv.invoice_date or '-' }}</td>
           <td class="clickable invoice-main-cell" onclick="location.href='/list/{{ inv.id }}'"><strong>{{ inv.seller_name or '未知销售方' }}</strong><span>{{ inv.invoice_number or '暂无发票号码' }}</span><small>{{ inv.buyer_name or '未填写购买方' }}</small></td>
           <td class="clickable invoice-main-cell" onclick="location.href='/list/{{ inv.id }}'"><strong>{{ inv.commodity_name or '未填写项目' }}</strong><span>{{ inv.category or '未分类' }}</span></td>
@@ -149,6 +149,7 @@
     </span>
 
     <a id="batch-export-link" href="#" class="btn btn-outline btn-sm">导出选中</a>
+    <a id="batch-required-link" href="#" class="btn btn-outline btn-sm">选为必选发票</a>
   </form>
   <button class="btn btn-outline btn-sm" onclick="clearSelection()" style="margin-left:4px;">取消选择</button>
 </div>
@@ -234,13 +235,20 @@ function clearSelection() {
 // Update export link when selection changes
 document.addEventListener('change', function(e) {
   if (e.target.classList.contains('row-checkbox') || e.target.id === 'select-all') {
-    const ids = Array.from(document.querySelectorAll('#invoice-table .row-checkbox:checked'))
-      .filter(cb => cb.dataset.status === 'ready').map(cb => cb.value);
+    const ready = Array.from(document.querySelectorAll('#invoice-table .row-checkbox:checked'))
+      .filter(cb => cb.dataset.status === 'ready');
+    const ids = ready.map(cb => cb.value);
+    const numbers = ready.map(cb => cb.dataset.invoiceNumber).filter(n => n);
     const exportLink = document.getElementById('batch-export-link');
+    const requiredLink = document.getElementById('batch-required-link');
     if (ids.length > 0) {
       exportLink.href = '/export?ids=' + ids.join(',');
+      requiredLink.href = numbers.length > 0
+        ? '/export?required_numbers=' + encodeURIComponent(numbers.join(',')) + '#match'
+        : '#';
     } else {
       exportLink.href = '#';
+      requiredLink.href = '#';
     }
   }
 });

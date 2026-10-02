@@ -151,3 +151,69 @@ def find_multiple_candidates(
 
     # 截取需要的数量
     return result[:count]
+
+
+def find_multiple_candidates_with_required(
+    invoices: List[dict],
+    target_amount: float,
+    required: List[dict],
+    count: int = 3,
+    max_count: int = 20,
+) -> List[Tuple[List[dict], float]]:
+    """
+    凑票：必须包含指定的发票。
+
+    先扣除必选发票的金额，再用剩余发票凑剩余目标金额，
+    最后把必选发票合并到每个候选方案中。
+
+    Args:
+        invoices: 候选发票池
+        target_amount: 目标报销金额
+        required: 必须包含的发票列表
+        count: 返回几组候选
+        max_count: 每组的最大发票张数（含必选项）
+
+    Returns:
+        [(发票列表, 合计金额), ...]，按合计金额降序排列
+    """
+    if not invoices or target_amount <= 0:
+        return []
+
+    required = [inv for inv in required if (inv.get("amount_with_tax") or 0) > 0]
+    required_total = sum(inv["amount_with_tax"] for inv in required)
+
+    # 必选金额已超目标：仅返回必选方案，由调用方决定是否接受
+    if required_total > target_amount:
+        return [(required, required_total)] if required else []
+
+    remaining_target = target_amount - required_total
+    required_ids = {inv["id"] for inv in required}
+    remaining_pool = [inv for inv in invoices if inv["id"] not in required_ids]
+    remaining_max_count = max(0, max_count - len(required))
+
+    # 必选即已凑满或剩余资源耗尽：直接返回仅含必选的方案
+    if remaining_target <= 0 or not remaining_pool or remaining_max_count == 0:
+        return [(required, required_total)] if required else []
+
+    sub_results = find_multiple_candidates(
+        remaining_pool, remaining_target,
+        count=count, max_count=remaining_max_count,
+    )
+
+    if not sub_results:
+        # 剩余池中找不到合规组合，仅返回必选
+        return [(required, required_total)]
+
+    # 合并必选 + 各候选方案
+    combined: List[Tuple[List[dict], float]] = []
+    seen: set = set()
+    for sub_invoices, sub_total in sub_results:
+        merged = required + sub_invoices
+        merged.sort(key=lambda x: x["amount_with_tax"], reverse=True)
+        key = frozenset(inv["id"] for inv in merged)
+        if key in seen:
+            continue
+        seen.add(key)
+        combined.append((merged, required_total + sub_total))
+
+    return combined[:count]
