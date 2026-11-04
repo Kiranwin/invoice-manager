@@ -10,9 +10,9 @@ import logging
 from decimal import Decimal
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -70,14 +70,6 @@ class DatabaseBackend(ABC):
         ...
 
     @abstractmethod
-    def query_invoices(self, filters: dict) -> List[dict]:
-        ...
-
-    @abstractmethod
-    def update_invoice_status(self, inv_id: int, excluded: bool = True):
-        ...
-
-    @abstractmethod
     def update_invoice(self, inv_id: int, updates: dict):
         ...
 
@@ -115,14 +107,6 @@ class DatabaseBackend(ABC):
 
     @abstractmethod
     def get_all_invoices(self) -> List[dict]:
-        ...
-
-    @abstractmethod
-    def get_distinct_projects(self) -> List[str]:
-        ...
-
-    @abstractmethod
-    def get_distinct_persons(self) -> List[str]:
         ...
 
     # ── 归属管理 ──────────────────────────────────────
@@ -170,10 +154,6 @@ class DatabaseBackend(ABC):
         ...
 
     @abstractmethod
-    def delete_attachments_by_invoice(self, invoice_id: int) -> int:
-        ...
-
-    @abstractmethod
     def delete_invoice(self, invoice_id: int) -> bool:
         ...
 
@@ -209,11 +189,6 @@ class DatabaseBackend(ABC):
         """根据 ID 列表批量获取发票"""
         ...
 
-    @abstractmethod
-    def search_invoices_by_tags(self, tag_ids: List[int]) -> List[dict]:
-        """根据标签 ID 列表获取所有关联的发票"""
-        ...
-
     # ── 报销单编辑（双方言共用实现）──────────────────
     #
     # 下面这些方法只在基类实现一次：SQL 统一用 `?` 占位，由 _sql() 转换到
@@ -238,6 +213,133 @@ class DatabaseBackend(ABC):
         row = cur.fetchone()
         return int(row[0] or 0), int(row[1] or 0)
 
+    # ── 发票查询（双方言共用实现）──────────────────
+
+    INVOICE_ORDER_FIELDS = {"invoice_date", "amount_with_tax", "seller_name",
+                            "belong_project", "status", "created_at", "id"}
+
+    def _invoice_where(self, filters: dict):
+        """根据筛选条件拼接 WHERE 子句，返回 (子句, 参数列表)。"""
+        clauses: List[str] = []
+        params: List = []
+
+        if filters.get("date_from"):
+            clauses.append("invoice_date >= ?")
+            params.append(filters["date_from"])
+        if filters.get("date_to"):
+            clauses.append("invoice_date <= ?")
+            params.append(filters["date_to"])
+        if filters.get("seller"):
+            clauses.append("seller_name LIKE ?")
+            params.append(f"%{filters['seller']}%")
+        if filters.get("buyer"):
+            clauses.append("buyer_name LIKE ?")
+            params.append(f"%{filters['buyer']}%")
+        if filters.get("project"):
+            clauses.append("belong_project = ?")
+            params.append(filters["project"])
+        if filters.get("person"):
+            clauses.append("belong_person = ?")
+            params.append(filters["person"])
+        if filters.get("search"):
+            like = f"%{filters['search']}%"
+            clauses.append("(seller_name LIKE ? OR buyer_name LIKE ? "
+                           "OR invoice_number LIKE ? OR commodity_name LIKE ?)")
+            params.extend([like] * 4)
+        # 金额按分传入，比较时留一个极小容差，避开 REAL 存储的二进制误差
+        if filters.get("amount_min_cents") is not None:
+            clauses.append("amount_with_tax >= ?")
+            params.append(filters["amount_min_cents"] / 100 - 1e-9)
+        if filters.get("amount_max_cents") is not None:
+            clauses.append("amount_with_tax <= ?")
+            params.append(filters["amount_max_cents"] / 100 + 1e-9)
+        statuses = [s for s in (filters.get("statuses") or []) if s]
+        if statuses:
+            clauses.append("status IN (" + ",".join("?" * len(statuses)) + ")")
+            params.extend(statuses)
+        if filters.get("tag_id"):
+            clauses.append("id IN (SELECT invoice_id FROM invoice_tags WHERE tag_id=?)")
+            params.append(int(filters["tag_id"]))
+        if filters.get("only_included", True):
+            clauses.append("status = 'ready'")
+        if filters.get("exclude_ids"):
+            ids = list(filters["exclude_ids"])
+            clauses.append("id NOT IN (" + ",".join("?" * len(ids)) + ")")
+            params.extend(ids)
+
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        return where, params
+
+    def query_invoices(self, filters: dict) -> List[dict]:
+        where, params = self._invoice_where(filters)
+        return self._fetchall(self._sql(
+            f"SELECT * FROM invoices{where} ORDER BY invoice_date ASC, id ASC"), params)
+
+    def query_invoices_page(self, filters: dict, order_by: str = "invoice_date",
+                            order_dir: str = "desc", page: int = 1,
+                            per_page: int = 50):
+        """分页查询，返回 (当页记录, 总条数, 实际页码, 总页数)。
+
+        页码超出范围时自动回退到最后一页，避免用户改完筛选后停在空白页。
+        """
+        where, params = self._invoice_where(filters)
+        column = order_by if order_by in self.INVOICE_ORDER_FIELDS else "invoice_date"
+        direction = "DESC" if str(order_dir).lower() == "desc" else "ASC"
+        per_page = max(1, min(int(per_page), 500))
+        page = max(1, int(page))
+
+        total_row = self._fetchone(
+            self._sql(f"SELECT COUNT(*) AS n FROM invoices{where}"), params)
+        total = int((total_row or {}).get("n") or 0)
+        total_pages = max(1, (total + per_page - 1) // per_page)
+        page = min(page, total_pages)
+
+        rows = self._fetchall(self._sql(
+            f"SELECT * FROM invoices{where} ORDER BY {column} {direction}, id {direction} "
+            f"LIMIT ? OFFSET ?"), [*params, per_page, (page - 1) * per_page])
+        return rows, total, page, total_pages
+
+    def invoice_stats(self) -> dict:
+        """按状态聚合的发票统计，避免把全表读进 Python。"""
+        rows = self._fetchall(self._sql(
+            "SELECT status, COUNT(*) AS n, COALESCE(SUM(amount_with_tax), 0) AS amount "
+            "FROM invoices GROUP BY status"))
+        counts = {"pending": 0, "ready": 0, "excluded": 0, "reported": 0}
+        total = 0
+        total_amount = 0.0
+        reimbursable_amount = 0.0
+        for row in rows:
+            count = int(row["n"] or 0)
+            amount = float(row["amount"] or 0)
+            status = row["status"]
+            if status in counts:
+                counts[status] = count
+            if status == "ready":
+                reimbursable_amount += amount
+            total += count
+            total_amount += amount
+        return {
+            "total": total,
+            "pending_count": counts["pending"],
+            "ok_count": counts["ready"],
+            "excluded_count": counts["excluded"],
+            "reported_count": counts["reported"],
+            "total_amount": total_amount,
+            "reimbursable_amount": reimbursable_amount,
+        }
+
+    def purge_import_failures(self, older_than_days: int = 30) -> List[dict]:
+        """删除过期的识别失败记录，返回被删掉的记录（调用方负责清理文件）。"""
+        cutoff = (datetime.now() - timedelta(days=older_than_days)).isoformat(timespec="seconds")
+        rows = self._fetchall(
+            self._sql("SELECT * FROM import_failures WHERE created_at < ?"), [cutoff])
+        if not rows:
+            return []
+        with self._transaction() as cur:
+            for row in rows:
+                cur.execute(self._sql("DELETE FROM import_failures WHERE id=?"), [row["id"]])
+        return rows
+
     def get_reimbursement(self, batch_id: int) -> Optional[dict]:
         """返回报销单及其发票明细、事件记录。"""
         batch = self._fetchone(
@@ -258,6 +360,21 @@ class DatabaseBackend(ABC):
             "SELECT batch_id FROM reimbursement_items WHERE invoice_id=? "
             "ORDER BY batch_id DESC LIMIT 1"), [invoice_id])
         return row["batch_id"] if row else None
+
+    def invoices_in_open_batches(self, invoice_ids: List[int]) -> dict:
+        """返回 {invoice_id: [batch_id]}，只统计未作废的报销单。"""
+        ids = list(dict.fromkeys(int(i) for i in invoice_ids))
+        if not ids:
+            return {}
+        placeholders = ",".join("?" * len(ids))
+        rows = self._fetchall(self._sql(
+            "SELECT ri.invoice_id, b.id AS batch_id FROM reimbursement_items ri "
+            "JOIN reimbursement_batches b ON b.id = ri.batch_id "
+            f"WHERE b.status != 'voided' AND ri.invoice_id IN ({placeholders})"), ids)
+        conflicts: dict = {}
+        for row in rows:
+            conflicts.setdefault(row["invoice_id"], []).append(row["batch_id"])
+        return conflicts
 
     def add_reimbursement_event(self, batch_id: int, action: str, detail: str = ""):
         with self._transaction() as cur:
@@ -680,45 +797,12 @@ class SQLiteBackend(DatabaseBackend):
         )
         return row is not None
 
-    def query_invoices(self, filters: dict) -> List[dict]:
-        sql = "SELECT * FROM invoices WHERE 1=1"
-        params = []
-
-        if filters.get("date_from"):
-            sql += " AND invoice_date >= ?"
-            params.append(filters["date_from"])
-        if filters.get("date_to"):
-            sql += " AND invoice_date <= ?"
-            params.append(filters["date_to"])
-        if filters.get("seller"):
-            sql += " AND seller_name LIKE ?"
-            params.append(f"%{filters['seller']}%")
-        if filters.get("buyer"):
-            sql += " AND buyer_name LIKE ?"
-            params.append(f"%{filters['buyer']}%")
-        if filters.get("project"):
-            sql += " AND belong_project = ?"
-            params.append(filters["project"])
-        if filters.get("person"):
-            sql += " AND belong_person = ?"
-            params.append(filters["person"])
-        if filters.get("only_included", True):
-            sql += " AND status = 'ready'"
-        if filters.get("exclude_ids"):
-            placeholders = ",".join("?" * len(filters["exclude_ids"]))
-            sql += f" AND id NOT IN ({placeholders})"
-            params.extend(filters["exclude_ids"])
-
-        sql += " ORDER BY invoice_date ASC, id ASC"
-        return self._fetchall(sql, params)
-
-    def update_invoice_status(self, inv_id: int, excluded: bool = True):
-        self._execute("UPDATE invoices SET excluded=?, status=? WHERE id=?",
-                      [1 if excluded else 0, "excluded" if excluded else "ready", inv_id])
-
     def update_invoice(self, inv_id: int, updates: dict):
         if not updates:
             return
+        unknown = [key for key in updates if key not in INVOICE_COLS]
+        if unknown:
+            raise ValueError("不支持的发票字段: " + ", ".join(unknown))
         set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
         values = list(updates.values()) + [inv_id]
         self._execute(f"UPDATE invoices SET {set_clause} WHERE id = ?", values)
@@ -728,18 +812,6 @@ class SQLiteBackend(DatabaseBackend):
 
     def get_all_invoices(self) -> List[dict]:
         return self._fetchall("SELECT * FROM invoices ORDER BY invoice_date ASC")
-
-    def get_distinct_projects(self) -> List[str]:
-        rows = self._fetchall(
-            "SELECT DISTINCT belong_project FROM invoices WHERE belong_project != '' ORDER BY belong_project"
-        )
-        return [r["belong_project"] for r in rows]
-
-    def get_distinct_persons(self) -> List[str]:
-        rows = self._fetchall(
-            "SELECT DISTINCT belong_person FROM invoices WHERE belong_person != '' ORDER BY belong_person"
-        )
-        return [r["belong_person"] for r in rows]
 
     # ── 归属管理 ──────────────────────────────────
 
@@ -804,11 +876,11 @@ class SQLiteBackend(DatabaseBackend):
     def delete_attachment(self, attachment_id: int) -> bool:
         return self._execute_update("DELETE FROM attachments WHERE id=?", [attachment_id]) > 0
 
-    def delete_attachments_by_invoice(self, invoice_id: int) -> int:
+    def _delete_attachments_by_invoice(self, invoice_id: int) -> int:
         return self._execute_update("DELETE FROM attachments WHERE invoice_id=?", [invoice_id])
 
     def delete_invoice(self, invoice_id: int) -> bool:
-        self.delete_attachments_by_invoice(invoice_id)
+        self._delete_attachments_by_invoice(invoice_id)
         return self._execute_update("DELETE FROM invoices WHERE id=?", [invoice_id]) > 0
 
     # ── 标签系统 ──────────────────────────────────────
@@ -849,18 +921,6 @@ class SQLiteBackend(DatabaseBackend):
         return self._fetchall(
             f"SELECT * FROM invoices WHERE id IN ({placeholders}) ORDER BY invoice_date ASC",
             ids
-        )
-
-    def search_invoices_by_tags(self, tag_ids: List[int]) -> List[dict]:
-        if not tag_ids:
-            return []
-        placeholders = ",".join("?" * len(tag_ids))
-        return self._fetchall(
-            "SELECT DISTINCT i.* FROM invoices i "
-            "JOIN invoice_tags it ON i.id = it.invoice_id "
-            f"WHERE it.tag_id IN ({placeholders}) "
-            "ORDER BY i.invoice_date ASC",
-            tag_ids
         )
 
     def get_all_invoice_tags(self) -> dict:
@@ -940,11 +1000,6 @@ class PostgreSQLBackend(DatabaseBackend):
                 cur.execute(sql, params or [])
                 conn.commit()
                 return cur.rowcount
-
-    @staticmethod
-    def _p(params: list) -> list:
-        """Placeholder converter: SQLite ? → PG %s (no-op, psycopg2 uses %s style)"""
-        return params
 
     PLACEHOLDER = "%s"
 
@@ -1205,45 +1260,12 @@ class PostgreSQLBackend(DatabaseBackend):
         )
         return row is not None
 
-    def query_invoices(self, filters: dict) -> List[dict]:
-        sql = "SELECT * FROM invoices WHERE 1=1"
-        params = []
-
-        if filters.get("date_from"):
-            sql += " AND invoice_date >= %s"
-            params.append(filters["date_from"])
-        if filters.get("date_to"):
-            sql += " AND invoice_date <= %s"
-            params.append(filters["date_to"])
-        if filters.get("seller"):
-            sql += " AND seller_name LIKE %s"
-            params.append(f"%{filters['seller']}%")
-        if filters.get("buyer"):
-            sql += " AND buyer_name LIKE %s"
-            params.append(f"%{filters['buyer']}%")
-        if filters.get("project"):
-            sql += " AND belong_project = %s"
-            params.append(filters["project"])
-        if filters.get("person"):
-            sql += " AND belong_person = %s"
-            params.append(filters["person"])
-        if filters.get("only_included", True):
-            sql += " AND status = 'ready'"
-        if filters.get("exclude_ids"):
-            placeholders = ",".join("%s" for _ in filters["exclude_ids"])
-            sql += f" AND id NOT IN ({placeholders})"
-            params.extend(filters["exclude_ids"])
-
-        sql += " ORDER BY invoice_date ASC, id ASC"
-        return self._fetchall(sql, params)
-
-    def update_invoice_status(self, inv_id: int, excluded: bool = True):
-        self._execute("UPDATE invoices SET excluded=%s, status=%s WHERE id=%s",
-                      [1 if excluded else 0, "excluded" if excluded else "ready", inv_id])
-
     def update_invoice(self, inv_id: int, updates: dict):
         if not updates:
             return
+        unknown = [key for key in updates if key not in INVOICE_COLS]
+        if unknown:
+            raise ValueError("不支持的发票字段: " + ", ".join(unknown))
         set_clause = ", ".join(f"{k} = %s" for k in updates.keys())
         values = list(updates.values()) + [inv_id]
         self._execute(f"UPDATE invoices SET {set_clause} WHERE id = %s", values)
@@ -1253,18 +1275,6 @@ class PostgreSQLBackend(DatabaseBackend):
 
     def get_all_invoices(self) -> List[dict]:
         return self._fetchall("SELECT * FROM invoices ORDER BY invoice_date ASC")
-
-    def get_distinct_projects(self) -> List[str]:
-        rows = self._fetchall(
-            "SELECT DISTINCT belong_project FROM invoices WHERE belong_project != '' ORDER BY belong_project"
-        )
-        return [r["belong_project"] for r in rows]
-
-    def get_distinct_persons(self) -> List[str]:
-        rows = self._fetchall(
-            "SELECT DISTINCT belong_person FROM invoices WHERE belong_person != '' ORDER BY belong_person"
-        )
-        return [r["belong_person"] for r in rows]
 
     # ── 归属管理 ──────────────────────────────────
 
@@ -1330,11 +1340,11 @@ class PostgreSQLBackend(DatabaseBackend):
     def delete_attachment(self, attachment_id: int) -> bool:
         return self._execute_update("DELETE FROM attachments WHERE id=%s", [attachment_id]) > 0
 
-    def delete_attachments_by_invoice(self, invoice_id: int) -> int:
+    def _delete_attachments_by_invoice(self, invoice_id: int) -> int:
         return self._execute_update("DELETE FROM attachments WHERE invoice_id=%s", [invoice_id])
 
     def delete_invoice(self, invoice_id: int) -> bool:
-        self.delete_attachments_by_invoice(invoice_id)
+        self._delete_attachments_by_invoice(invoice_id)
         return self._execute_update("DELETE FROM invoices WHERE id=%s", [invoice_id]) > 0
 
     # ── 标签系统 ──────────────────────────────────────
@@ -1374,18 +1384,6 @@ class PostgreSQLBackend(DatabaseBackend):
         return self._fetchall(
             f"SELECT * FROM invoices WHERE id IN ({placeholders}) ORDER BY invoice_date ASC",
             ids
-        )
-
-    def search_invoices_by_tags(self, tag_ids: List[int]) -> List[dict]:
-        if not tag_ids:
-            return []
-        placeholders = ",".join("%s" for _ in tag_ids)
-        return self._fetchall(
-            "SELECT DISTINCT i.* FROM invoices i "
-            "JOIN invoice_tags it ON i.id = it.invoice_id "
-            f"WHERE it.tag_id IN ({placeholders}) "
-            "ORDER BY i.invoice_date ASC",
-            tag_ids
         )
 
     def get_all_invoice_tags(self) -> dict:

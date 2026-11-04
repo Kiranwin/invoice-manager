@@ -15,7 +15,7 @@ from .file_utils import (
     ofd_to_pdf, build_archive_path, archive_invoice,
     extract_text_from_pdf  # 仅用于内容预检
 )
-from .engines import BaiduOCREngine, LLMVisionEngine, TextOCREngine, EngineResult
+from .engines import BaiduOCREngine, LLMVisionEngine, TextOCREngine
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +41,7 @@ class InvoiceProcessor:
         # 临时变量，用于记录处理中的信息
         self._original_filename = ""
         self._raw_text = ""
+        self._raw_json = ""
         self._error: Optional[str] = None
 
     def _init_engines(self):
@@ -117,7 +118,6 @@ class InvoiceProcessor:
         # ── 3. 两级识别 ────────────────────────────────────
         fields = self._recognize(working_path)
         if not fields:
-            err = self._error or "所有识别引擎均失败"
             logger.error(f"所有识别引擎均失败: {file_path.name}")
             return None
 
@@ -163,11 +163,17 @@ class InvoiceProcessor:
         return record
 
     def _recognize(self, file_path: Path) -> Optional[Dict[str, Any]]:
-        """执行三级识别引擎"""
+        """执行多级识别引擎，单个引擎抛错不影响后续层级"""
         errors = []
         for engine in self.engines:
             logger.info(f"尝试第{engine.priority}级引擎: {engine.name}")
-            result = engine.extract(str(file_path))
+            try:
+                result = engine.extract(str(file_path))
+            except Exception as exc:
+                # 引擎内部的意外错误（缺失依赖、网络异常、解析崩溶）不应打断整条链路
+                logger.exception(f"{engine.name} 识别异常")
+                errors.append(f"{engine.name}: 异常 {exc}")
+                continue
 
             if result.is_valid:
                 logger.info(f"✅ {engine.name} 识别成功，置信度={result.confidence:.2f}")

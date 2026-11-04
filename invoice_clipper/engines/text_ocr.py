@@ -5,7 +5,7 @@
 import re
 import logging
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Dict, Any
 
 from .base import BaseEngine, EngineResult
 from ._utils import normalize_date, infer_category, calculate_confidence

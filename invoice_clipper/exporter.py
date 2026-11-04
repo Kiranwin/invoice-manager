@@ -5,7 +5,6 @@
 """
 import logging
 from decimal import Decimal
-import shutil
 from pathlib import Path
 from typing import List, Optional
 from datetime import datetime
@@ -13,6 +12,12 @@ from datetime import datetime
 import fitz
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_export_dir(config: dict | None = None) -> Path:
+    """统一的导出目录：优先取配置里的 storage.export_dir，否则落到 Documents 下。"""
+    configured = (config or {}).get("storage", {}).get("export_dir")
+    return Path(configured).expanduser() if configured else Path.home() / "Documents" / "发票夹子" / "exports"
 
 
 def export_excel(invoices: List[dict], output_path: Path) -> Path:

@@ -7,7 +7,7 @@
 - 提供多组候选结果供用户选择
 """
 import logging
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Tuple
 
 logger = logging.getLogger(__name__)
 

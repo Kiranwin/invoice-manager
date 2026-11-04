@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% block content %}
 
+{% set status_labels = {'pending': '待确认', 'ready': '可报销', 'excluded': '已排除', 'reported': '已报销'} %}
+
 <div class="page-header">
   <div><h1>发票库</h1><p>统一查看、核对和筛选所有发票。</p></div>
   <a href="/inbox" class="btn btn-primary btn-sm">导入新发票</a>
@@ -30,12 +32,18 @@
 
 <div class="card">
   <form method="GET" action="/list">
+    <input type="hidden" name="sort" value="{{ sort }}">
+    <input type="hidden" name="dir" value="{{ dir }}">
+    <input type="hidden" name="per_page" value="{{ per_page }}">
     <div class="form-row">
       <div class="form-group" style="flex: 1; min-width: 220px;">
         <label>搜索</label>
-        <input type="text" name="search" placeholder="销售方 / 发票号码 / 项目名称 / 金额" value="{{ search }}">
+        <input type="text" name="search" placeholder="销售方 / 购买方 / 发票号码 / 项目名称" value="{{ search }}">
       </div>
-      <div class="form-group amount-filter"><label>金额</label><input type="number" name="amount" step="0.01" min="0" placeholder="精确金额" value="{{ amount_filter }}"></div>
+      <div class="form-group amount-filter">
+        <label>金额</label>
+        <input type="text" name="amount" placeholder="100、&gt;=100、100-200" value="{{ amount_filter }}">
+      </div>
       <div class="form-group checkbox">
         <input type="checkbox" name="status" value="待确认" id="st_pending" {{ 'checked' if '待确认' in status_filter else '' }}>
         <label for="st_pending">待确认</label>
@@ -61,9 +69,16 @@
       <div class="form-group"><label>归属人</label><select name="person"><option value="">全部</option>{% for p in persons %}<option value="{{ p.name }}" {{ 'selected' if filters.person == p.name }}>{{ p.name }}</option>{% endfor %}</select></div>
       <div class="form-group"><label>标签</label><select name="tag_id"><option value="">全部</option>{% for t in all_tags %}<option value="{{ t.id }}" {{ 'selected' if tag_id == t.id|string }}>{{ t.name }}</option>{% endfor %}</select></div>
       <button type="submit" class="btn btn-primary">筛选</button>
+      {% if search or amount_filter or tag_id or filters.date_from or filters.date_to or filters.seller or filters.buyer or filters.project or filters.person %}
+      <a href="/list" class="btn btn-ghost">清空条件</a>
+      {% endif %}
     </div>
   </form>
 </div>
+
+{% if invalid_amount %}
+<div class="flash warning"><span class="flash-mark">!</span><span>金额格式无法识别，试试 100、&gt;=100 或 100-200。</span></div>
+{% endif %}
 
 {% if invoices %}
 <div class="card" style="padding: 0; overflow: hidden;">
@@ -71,13 +86,13 @@
     <table id="invoice-table">
       <thead>
         <tr>
-          <th class="checkbox-cell"><input type="checkbox" id="select-all" title="全选"></th>
-          <th data-sort="invoice_date" class="sorted-desc">日期<span class="sort-icon">▼</span></th>
-          <th data-sort="seller_name">发票信息<span class="sort-icon">⇅</span></th>
-          <th data-sort="commodity_name">项目<span class="sort-icon">⇅</span></th>
-          <th data-sort="amount_with_tax">金额<span class="sort-icon">⇅</span></th>
-          <th data-sort="belong_project">归属<span class="sort-icon">⇅</span></th>
-          <th data-sort="excluded">状态<span class="sort-icon">⇅</span></th>
+          <th class="checkbox-cell"><input type="checkbox" id="select-all" title="全选当前页"></th>
+          <th><a class="th-sort" href="{{ sort_links.invoice_date.url }}">日期<span class="sort-icon">{{ '▲' if sort_links.invoice_date.active and dir == 'asc' else '▼' if sort_links.invoice_date.active else '⇅' }}</span></a></th>
+          <th><a class="th-sort" href="{{ sort_links.seller_name.url }}">发票信息<span class="sort-icon">{{ '▲' if sort_links.seller_name.active and dir == 'asc' else '▼' if sort_links.seller_name.active else '⇅' }}</span></a></th>
+          <th>项目</th>
+          <th><a class="th-sort" href="{{ sort_links.amount_with_tax.url }}">金额<span class="sort-icon">{{ '▲' if sort_links.amount_with_tax.active and dir == 'asc' else '▼' if sort_links.amount_with_tax.active else '⇅' }}</span></a></th>
+          <th><a class="th-sort" href="{{ sort_links.belong_project.url }}">归属<span class="sort-icon">{{ '▲' if sort_links.belong_project.active and dir == 'asc' else '▼' if sort_links.belong_project.active else '⇅' }}</span></a></th>
+          <th><a class="th-sort" href="{{ sort_links.status.url }}">状态<span class="sort-icon">{{ '▲' if sort_links.status.active and dir == 'asc' else '▼' if sort_links.status.active else '⇅' }}</span></a></th>
           <th>标签</th>
           <th>操作</th>
         </tr>
@@ -92,7 +107,7 @@
           <td class="clickable invoice-main-cell" onclick="location.href='/list/{{ inv.id }}'"><strong>{{ inv.commodity_name or '未填写项目' }}</strong><span>{{ inv.category or '未分类' }}</span></td>
           <td class="money clickable amount-cell" onclick="location.href='/list/{{ inv.id }}'"><strong>{{ "¥%.2f" | format(inv.amount_with_tax or 0) }}</strong><span>税额 ¥{{ "%.2f" | format(inv.tax_amount or 0) }}</span></td>
           <td class="clickable invoice-main-cell" onclick="location.href='/list/{{ inv.id }}'"><strong>{{ inv.belong_project or '未分配项目' }}</strong><span>{{ inv.belong_person or '未分配归属人' }}</span></td>
-          <td class="center clickable" onclick="location.href='/list/{{ inv.id }}'"><span class="tag {{ 'tag-danger' if excluded else 'tag-success' }}">{{ {'pending':'待确认', 'ready':'可报销', 'excluded':'已排除', 'reported':'已报销'}.get(inv.status, inv.status) }}</span></td>
+          <td class="center clickable" onclick="location.href='/list/{{ inv.id }}'"><span class="tag {{ 'tag-danger' if excluded else 'tag-success' if inv.status == 'ready' else '' }}">{{ status_labels.get(inv.status, inv.status) }}</span></td>
           <td class="tag-cell clickable" onclick="location.href='/list/{{ inv.id }}'">
             {% set inv_tags = invoice_tags.get(inv.id, []) %}
             {% for t in inv_tags[:3] %}
@@ -119,19 +134,39 @@
       </tbody>
     </table>
   </div>
+
+  <div class="pagination">
+    <span class="pagination-info">共 {{ total }} 张 · 第 {{ page_no }} / {{ total_pages }} 页</span>
+    <div class="pagination-pages">
+      {% if prev_url %}<a class="btn btn-outline btn-sm" href="{{ prev_url }}">上一页</a>{% endif %}
+      {% if page_urls %}
+        {% for n, url in page_urls.items() %}
+        <a class="page-num {{ 'active' if n == page_no else '' }}" href="{{ url }}">{{ n }}</a>
+        {% endfor %}
+      {% else %}
+        <span class="page-num active">{{ page_no }}</span>
+      {% endif %}
+      {% if next_url %}<a class="btn btn-outline btn-sm" href="{{ next_url }}">下一页</a>{% endif %}
+    </div>
+    <div class="pagination-size">
+      {% for size in page_sizes %}
+      <a href="{{ make_page_url(per_page=size, page=1) }}" class="{{ 'active' if size == per_page else '' }}">{{ size }} 条</a>
+      {% endfor %}
+    </div>
+  </div>
 </div>
 
 <!-- Floating Batch Toolbar -->
 <div id="batch-toolbar" class="batch-toolbar">
-  <span class="batch-count">已选 <strong id="batch-count-num">0</strong> 张</span>
+  <span class="batch-count">已选 <strong id="batch-count-num">0</strong> 张（当前页）</span>
   <form id="batch-form" method="POST" style="display:inline-flex; align-items:center; gap:8px; flex-wrap:wrap;">
     <input type="hidden" name="ids" id="batch-ids-input" value="">
-    
+
     <button type="submit" formaction="/list/batch-toggle?action=exclude" class="btn btn-outline btn-sm" onclick="return fillBatchIds(this)">标记排除</button>
     <button type="submit" formaction="/list/batch-toggle?action=include" class="btn btn-outline btn-sm" onclick="return fillBatchIds(this)">恢复正常</button>
     <button type="submit" formaction="/list/batch-toggle?action=confirm" class="btn btn-outline btn-sm" onclick="return fillBatchIds(this)">确认发票</button>
     <button type="submit" formaction="/list/batch-delete" class="btn btn-danger btn-sm" onclick="return fillBatchIds(this) && confirm('确认批量删除选中的发票？')">批量删除</button>
-    
+
     <span class="batch-assign-popup">
       <select name="belong_project" id="batch-project">
         <option value="">项目</option>
@@ -163,19 +198,16 @@
   const toolbar = document.getElementById('batch-toolbar');
   const countSpan = document.getElementById('batch-count-num');
 
-  // Get all row checkboxes
   function getCheckboxes() {
     return tbody.querySelectorAll('.row-checkbox');
   }
 
   function updateToolbar() {
     const checked = Array.from(getCheckboxes()).filter(cb => cb.checked);
-    const count = checked.length;
-    countSpan.textContent = count;
-    toolbar.classList.toggle('visible', count > 0);
+    countSpan.textContent = checked.length;
+    toolbar.classList.toggle('visible', checked.length > 0);
   }
 
-  // Select all / deselect all
   if (selectAll) {
     selectAll.addEventListener('change', function() {
       const checked = this.checked;
@@ -184,19 +216,12 @@
     });
   }
 
-  // Individual checkbox change
   getCheckboxes().forEach(function(cb) {
     cb.addEventListener('change', updateToolbar);
   });
 
-  // Update toolbar on page load (e.g. after form submit)
   updateToolbar();
 })();
-
-function getSelectedIds() {
-  const checkboxes = document.querySelectorAll('#invoice-table .row-checkbox:checked');
-  return Array.from(checkboxes).map(cb => cb.value);
-}
 
 function fillBatchIds(btn) {
   const checked = Array.from(document.querySelectorAll('#invoice-table .row-checkbox:checked'));
@@ -210,9 +235,7 @@ function fillBatchIds(btn) {
     alert('所选发票中没有适用于该操作的状态');
     return false;
   }
-  // Create or update hidden ids inputs in the form
   const form = btn.closest('form');
-  // Remove existing ids inputs
   form.querySelectorAll('input[name="ids"]').forEach(el => el.remove());
   ids.forEach(function(id) {
     const input = document.createElement('input');
@@ -232,7 +255,6 @@ function clearSelection() {
   document.getElementById('batch-toolbar').classList.remove('visible');
 }
 
-// Update export link when selection changes
 document.addEventListener('change', function(e) {
   if (e.target.classList.contains('row-checkbox') || e.target.id === 'select-all') {
     const ready = Array.from(document.querySelectorAll('#invoice-table .row-checkbox:checked'))
@@ -252,72 +274,23 @@ document.addEventListener('change', function(e) {
     }
   }
 });
-
-// ── Sorting ──────────────────────────────────────
-(function() {
-  const table = document.getElementById('invoice-table');
-  if (!table) return;
-  const tbody = table.querySelector('tbody');
-
-  function getCellValue(tr, idx) {
-    const td = tr.children[idx];
-    if (!td) return '';
-    const raw = td.textContent.trim();
-    // 日期格式 YYYY-MM-DD 直接返回字符串，让 Date.parse 处理
-    if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw;
-    const num = parseFloat(raw.replace(/[¥,\s]/g, ''));
-    if (!isNaN(num)) return num;
-    return raw;
-  }
-
-  function getColumnIndex(header) {
-    return Array.from(header.parentElement.children).indexOf(header);
-  }
-
-  function sortTable(colIdx, ascending) {
-    const rows = Array.from(tbody.querySelectorAll('tr'));
-    rows.sort(function(a, b) {
-      let va = getCellValue(a, colIdx);
-      let vb = getCellValue(b, colIdx);
-      if (typeof va === 'string' && typeof vb === 'string') {
-        const da = Date.parse(va);
-        const db = Date.parse(vb);
-        if (!isNaN(da) && !isNaN(db)) { va = da; vb = db; }
-      }
-      if (va < vb) return ascending ? -1 : 1;
-      if (va > vb) return ascending ? 1 : -1;
-      return 0;
-    });
-    rows.forEach(function(row) { tbody.appendChild(row); });
-  }
-
-  const headers = table.querySelectorAll('th[data-sort]');
-  headers.forEach(function(th) {
-    th.addEventListener('click', function() {
-      const colIdx = getColumnIndex(th);
-      const isAsc = th.classList.contains('sorted-asc');
-      headers.forEach(function(h) {
-        h.classList.remove('sorted-asc', 'sorted-desc');
-        const icon = h.querySelector('.sort-icon');
-        if (icon) icon.textContent = '⇅';
-      });
-      const ascending = !isAsc;
-      th.classList.add(ascending ? 'sorted-asc' : 'sorted-desc');
-      const icon = th.querySelector('.sort-icon');
-      if (icon) icon.textContent = ascending ? '▲' : '▼';
-      sortTable(colIdx, ascending);
-    });
-  });
-})();
 </script>
 
 {% else %}
 <div class="card">
   <div class="empty-state">
+    {% if invalid_amount %}
+    <p>金额条件无法解析</p>
+    <p style="margin-top: 8px; font-size: 13px;">用 100、&gt;=100、&lt;=100 或 100-200 这样的写法</p>
+    {% elif search or amount_filter or tag_id or filters.date_from or filters.date_to or filters.seller or filters.buyer or filters.project or filters.person %}
+    <p>没有符合当前条件的发票</p>
+    <p style="margin-top: 8px; font-size: 13px;"><a href="/list" style="color: #3ba6f1;">清空筛选条件</a></p>
+    {% else %}
     <p>暂无发票记录</p>
     <p style="margin-top: 8px; font-size: 13px;">
       <a href="/inbox" style="color: #3ba6f1;">导入</a> 第一张发票
     </p>
+    {% endif %}
   </div>
 </div>
 {% endif %}

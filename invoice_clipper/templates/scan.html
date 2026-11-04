@@ -29,13 +29,26 @@
 </div>
 
 <div class="card">
-  <h3>识别失败 · {{ failures | length }} 个</h3>
+  <div class="section-heading">
+    <div>
+      <h3>识别失败 · {{ failures | length }} 个</h3>
+      <p>{% if failures %}原文件占用 {{ failure_size_label }} · 超过 {{ failure_retention_days }} 天的记录会在启动时自动清理{% else %}识别失败的文件会保留原文件，方便重试{% endif %}</p>
+    </div>
+    {% if failures %}
+    <form method="POST" action="/inbox/failures/purge">
+      <button type="submit" class="btn btn-outline btn-sm" onclick="return confirm('清理超过 {{ failure_retention_days }} 天的失败记录？') ">清理过期记录</button>
+    </form>
+    {% endif %}
+  </div>
   {% if failures %}
   <div class="table-wrap"><table>
     <thead><tr><th>文件</th><th>失败原因</th><th>时间</th><th>操作</th></tr></thead>
     <tbody>{% for item in failures %}
-      <tr><td>{{ item.original_filename }}</td><td>{{ item.error }}</td><td>{{ item.created_at[:16] }}</td>
-        <td><form method="POST" action="/inbox/failures/{{ item.id }}/retry"><button type="submit" class="btn btn-outline btn-sm">重试识别</button></form></td></tr>
+      <tr><td>{{ item.original_filename }}</td><td>{{ item.error }}</td><td>{{ item.created_at[:16] | replace('T', ' ') }}</td>
+        <td class="action-cell">
+          <form method="POST" action="/inbox/failures/{{ item.id }}/retry" style="display:inline;"><button type="submit" class="btn btn-outline btn-sm">重试识别</button></form>
+          <form method="POST" action="/inbox/failures/{{ item.id }}/delete" style="display:inline;" onsubmit="return confirm('删除这条失败记录和它的原文件？')"><button type="submit" class="btn-icon danger" title="忽略并删除">✕</button></form>
+        </td></tr>
     {% endfor %}</tbody>
   </table></div>
   {% else %}<p class="empty-hint">暂无识别失败的文件。</p>{% endif %}

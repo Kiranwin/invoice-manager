@@ -304,30 +304,6 @@ td.center { text-align: center; }
 td a { color: #3ba6f1; text-decoration: none; }
 td a:hover { text-decoration: underline; }
 
-/* ── Edit Form (3-column grid) ─────────────────── */
-.edit-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
-  gap: 0 24px;
-  background: #ffffff;
-  border-radius: 10px;
-  padding: 24px;
-  box-shadow: rgba(0,0,0,0.05) 0px 4px 16px 0px;
-  margin-bottom: 20px;
-}
-.edit-grid .form-group { margin-bottom: 14px; }
-.edit-section-title {
-  grid-column: 1 / -1;
-  font-family: "roobert", system-ui, sans-serif;
-  font-size: 16px;
-  font-weight: 500;
-  letter-spacing: -0.017em;
-  color: #0c0a09;
-  padding-bottom: 8px;
-  border-bottom: 1px solid #e5e7eb;
-  margin-bottom: 16px;
-}
-
 /* ── Attachments ───────────────────────────────── */
 .att-grid {
   display: flex;
@@ -500,30 +476,6 @@ details pre {
   padding: 4px 0;
   user-select: none;
 }
-.batch-section .batch-checkboxes {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 12px 0;
-  max-height: 180px;
-  overflow-y: auto;
-}
-.batch-checkboxes label {
-  font-size: 13px;
-  color: #78716c;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  cursor: pointer;
-  padding: 4px 8px;
-  border-radius: 6px;
-  transition: background 0.15s;
-}
-.batch-checkboxes label:hover { background: #f5f5f4; }
-.batch-checkboxes input[type="checkbox"] {
-  accent-color: #3ba6f1;
-}
-
 /* ── Export Result Card ────────────────────────── */
 .result-card {
   background: #effbf6;
@@ -608,7 +560,6 @@ details pre {
   }
   .stat-card { padding: 16px; }
   .stat-card .stat-value { font-size: 20px; }
-  .edit-grid { grid-template-columns: 1fr; gap: 0; }
   .form-row { flex-direction: column; align-items: stretch; }
   .form-group { min-width: 0; }
   .form-group input[type="date"],
@@ -624,16 +575,6 @@ details pre {
 }
 
 /* ── Tag Badge System ───────────────────────────── */
-.tag-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 10px;
-  border-radius: 9999px;
-  font-size: 12px;
-  font-weight: 500;
-  white-space: nowrap;
-}
 .tag-badge-sm {
   display: inline-flex;
   align-items: center;
@@ -643,13 +584,6 @@ details pre {
   font-weight: 500;
   white-space: nowrap;
   line-height: 1.6;
-}
-.tag-dot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
 }
 .tag-cell {
   max-width: 140px;
@@ -683,26 +617,6 @@ details pre {
 .tag-checkbox-label input[type="checkbox"] {
   accent-color: #3ba6f1;
 }
-.tag-filter-select {
-  padding: 8px 12px;
-  border: 1px solid #d6d3d1;
-  border-radius: 8px;
-  background: #ffffff;
-  font-size: 14px;
-  color: #0c0a09;
-  min-width: 140px;
-}
-
-/* ── Inline form helper ─────────────────────────── */
-.form-inline .form-row {
-  display: flex;
-  align-items: flex-end;
-  gap: 12px;
-}
-.form-inline .form-group {
-  margin-bottom: 0;
-}
-
 /* ── Batch Action Toolbar ───────────────────────── */
 .batch-toolbar {
   display: none;
@@ -800,58 +714,6 @@ tr.clickable td.checkbox-cell { cursor: default; }
 tr.clickable td.checkbox-cell input { pointer-events: auto; }
 tr.clickable td:not(.checkbox-cell):not(.action-cell) {
   cursor: pointer;
-}
-
-/* ── Match Amount Page ──────────────────────────── */
-.match-controls {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-  margin-bottom: 20px;
-}
-.match-result-card {
-  background: #f0f7fe;
-  border: 1px solid #bfdbfe;
-  border-radius: 10px;
-  padding: 20px;
-  margin-bottom: 16px;
-}
-.match-result-card .match-summary {
-  font-size: 16px;
-  font-weight: 600;
-  color: #1e40af;
-  margin-bottom: 12px;
-}
-.match-result-card .match-detail {
-  display: flex;
-  gap: 24px;
-  flex-wrap: wrap;
-  color: #78716c;
-  font-size: 14px;
-}
-.match-result-card .match-detail span {
-  font-weight: 500;
-  color: #0c0a09;
-}
-.match-alt-card {
-  background: #ffffff;
-  border: 1px solid #e5e7eb;
-  border-radius: 10px;
-  padding: 16px 20px;
-  margin-bottom: 12px;
-  transition: box-shadow 0.15s;
-}
-.match-alt-card:hover { box-shadow: rgba(0,0,0,0.05) 0px 4px 12px 0px; }
-.match-alt-card .match-alt-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 8px;
-}
-.match-alt-card .match-alt-header h4 {
-  font-size: 14px;
-  font-weight: 500;
-  color: #0c0a09;
 }
 
 /* ── Export Mode Options ────────────────────────── */
@@ -1159,7 +1021,6 @@ tr.excluded .invoice-main-cell strong, tr.excluded .amount-cell strong { color:#
   gap: 8px;
 }
 .selected-inv-summary { background: var(--blue-soft); border-color: #d9e2ff; color: #4562b7; }
-.match-result-card, .match-alt-card { border: 1px solid var(--line); border-radius: 13px; background: var(--surface); box-shadow: 0 8px 22px rgba(31,48,80,.035); }
 .candidate-row:first-of-type { margin-top: 12px; }
 .candidate-row .btn { justify-self: start; }
 @media (max-width: 760px) {
@@ -1218,3 +1079,30 @@ tr.excluded .invoice-main-cell strong, tr.excluded .amount-cell strong { color:#
 .timeline-dot { width: 7px; height: 7px; border-radius: 50%; background: #c2cbd9; margin-top: 6px; flex: 0 0 auto; }
 .timeline-time { font-size: 11px; color: #a0aabd; }
 .timeline-text { font-size: 12px; color: #46536b; line-height: 1.5; }
+
+/* ── 列表排序与分页 ─────────────────────────────── */
+.th-sort { color: inherit; text-decoration: none; display: inline-flex; align-items: center; }
+.th-sort:hover { color: #0c0a09; }
+.pagination {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  flex-wrap: wrap; padding: 12px 16px; border-top: 1px solid var(--line); background: #fbfcfe;
+}
+.pagination-info { color: #7a8799; font-size: 12px; }
+.pagination-pages { display: flex; align-items: center; gap: 4px; }
+.page-num {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 30px; height: 30px; padding: 0 8px; border-radius: 8px;
+  font-size: 12px; color: #66738a; text-decoration: none; border: 1px solid transparent;
+}
+.page-num:hover { background: #eef3ff; color: var(--blue); }
+.page-num.active { background: var(--navy); border-color: var(--navy); color: #fff; }
+.pagination-size { display: flex; gap: 6px; align-items: center; }
+.pagination-size a {
+  font-size: 11px; color: #8d9ab0; text-decoration: none;
+  padding: 3px 7px; border-radius: 999px; border: 1px solid transparent;
+}
+.pagination-size a:hover { color: var(--ink); }
+.pagination-size a.active { color: var(--blue); background: var(--blue-soft); border-color: #d9e2ff; }
+@media (max-width: 760px) {
+  .pagination { flex-direction: column; align-items: flex-start; }
+}

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-发票夹子 Web UI — 启动入口（v3.5.0）
+发票夹子 Web UI — 启动入口（v3.6.0）
 
 用法：
     python -m invoice_clipper.__run__            # 正常启动（带进程锁）
@@ -9,7 +9,6 @@
     python -m invoice_clipper                    # 直接启动（无锁，等同 --debug）
 """
 import sys
-import os
 import webbrowser
 from pathlib import Path
 
@@ -57,7 +56,7 @@ def main():
     port = int(cfg.get("server", {}).get("port", 8000))
     url = f"http://{host}:{port}"
 
-    print(f"🚀 发票夹子正在启动 ...")
+    print("🚀 发票夹子正在启动 ...")
     print(f"   📍 Web UI:    {url}")
     print(f"   📍 MCP 接口:  {url}/mcp (Streamable HTTP)")
     print(f"   📄 {cfg_path}")

@@ -11,7 +11,6 @@
 """
 import logging
 import json
-import tempfile
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
@@ -21,13 +20,14 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from invoice_clipper import (
     load_config, init_db,
-    query_invoices, update_invoice, update_invoice_status,
-    get_invoice_by_id, get_all_invoices, delete_invoice,
+    query_invoices, update_invoice,
+    get_invoice_by_id, get_all_invoices,
     get_attachments,
     get_projects, add_project, delete_project,
     get_persons, add_person, delete_person,
     get_tags, add_tag, delete_tag, get_invoice_tags, set_invoice_tags,
     InvoiceProcessor, export_excel, export_merged_pdf, build_export_label,
+    resolve_export_dir,
 )
 from invoice_clipper.workflow import (
     change_invoice_state, delete_invoice_with_files, reimbursable_invoices,
@@ -617,6 +617,41 @@ def set_invoice_tags_tool(invoice_id: int, tag_ids: list[int]) -> str:
 
 # ── 工具：导出 ────────────────────────────────────
 
+def _export_and_record(invoices: list, filters: dict, kind: str, record: bool = True) -> dict:
+    """MCP 导出与 Web 共用同一套导出目录和报销单记录规则。"""
+    export_dir = resolve_export_dir(_config)
+    export_dir.mkdir(parents=True, exist_ok=True)
+    label = build_export_label(filters) if filters else "全部"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    total_amount = sum(amount_cents(i.get("amount_with_tax")) for i in invoices) / 100
+
+    if kind == "excel":
+        path = export_dir / f"报销明细_{label}_{timestamp}.xlsx"
+        export_excel(invoices, path)
+        package_mode = None
+    elif kind == "pdf":
+        path = export_dir / f"报销发票_{label}_{timestamp}.pdf"
+        if not export_merged_pdf(invoices, path):
+            raise RuntimeError("合并 PDF 导出失败")
+        package_mode = "merged_pdf"
+    else:
+        raise ValueError(f"不支持的导出格式: {kind}")
+
+    batch_id = None
+    if record:
+        batch_id = record_reimbursement(
+            invoices, [path], export_mode="invoice_only", package_mode=package_mode)
+
+    return {
+        "success": True,
+        "file_path": str(path),
+        "invoice_count": len(invoices),
+        "total_amount": round(total_amount, 2),
+        "export_format": kind,
+        "reimbursement_batch": batch_id,
+    }
+
+
 @mcp.tool(
     description="导出发票为 Excel 文件（.xlsx），返回导出文件路径。支持按日期/卖家/项目/归属人筛选。"
 )
@@ -656,24 +691,11 @@ def export_invoices_excel(
     if not invoices:
         return json.dumps({"warning": "没有符合条件的发票", "count": 0}, ensure_ascii=False)
 
-    export_dir = Path.home() / "Documents" / "发票夹子" / "exports"
-    export_dir.mkdir(parents=True, exist_ok=True)
-    label = build_export_label(filters) if filters else "全部"
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    excel_path = export_dir / f"报销明细_{label}_{timestamp}.xlsx"
-
-    export_excel(invoices, excel_path)
-    total_amount = sum(amount_cents(i.get("amount_with_tax")) for i in invoices) / 100
-    if only_included:
-        record_reimbursement(invoices, [excel_path])
-
-    return json.dumps({
-        "success": True,
-        "file_path": str(excel_path),
-        "invoice_count": len(invoices),
-        "total_amount": round(total_amount, 2),
-        "export_format": "excel",
-    }, ensure_ascii=False)
+    try:
+        payload = _export_and_record(invoices, filters, "excel", record=bool(only_included))
+    except Exception as exc:
+        return json.dumps({"error": f"Excel 导出失败: {exc}"}, ensure_ascii=False)
+    return json.dumps(payload, ensure_ascii=False)
 
 
 @mcp.tool(
@@ -715,27 +737,11 @@ def export_invoices_pdf(
     if not invoices:
         return json.dumps({"warning": "没有符合条件的发票", "count": 0}, ensure_ascii=False)
 
-    export_dir = Path.home() / "Documents" / "发票夹子" / "exports"
-    export_dir.mkdir(parents=True, exist_ok=True)
-    label = build_export_label(filters) if filters else "全部"
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    pdf_path = export_dir / f"报销发票_{label}_{timestamp}.pdf"
-
-    result = export_merged_pdf(invoices, pdf_path)
-    total_amount = sum(amount_cents(i.get("amount_with_tax")) for i in invoices) / 100
-
-    if result:
-        if only_included:
-            record_reimbursement(invoices, [pdf_path])
-        return json.dumps({
-            "success": True,
-            "file_path": str(pdf_path),
-            "invoice_count": len(invoices),
-            "total_amount": round(total_amount, 2),
-            "export_format": "pdf",
-        }, ensure_ascii=False)
-    else:
-        return json.dumps({"error": "合并 PDF 导出失败"}, ensure_ascii=False)
+    try:
+        payload = _export_and_record(invoices, filters, "pdf", record=bool(only_included))
+    except Exception as exc:
+        return json.dumps({"error": str(exc)}, ensure_ascii=False)
+    return json.dumps(payload, ensure_ascii=False)
 
 
 # ── 主入口 ────────────────────────────────────────
@@ -746,7 +752,6 @@ def main():
 
     # 解析 --transport 参数覆盖配置
     cli_transport = None
-    args = [a for a in sys.argv[1:] if not a.startswith("--transport=")]
     for i, a in enumerate(sys.argv[1:], 1):
         if a == "--transport" and i < len(sys.argv):
             cli_transport = sys.argv[i + 1]

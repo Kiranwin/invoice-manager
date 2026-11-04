@@ -148,6 +148,13 @@
   {% if marked_count %}
   <div class="summary" style="color: #166534;">已标记 <strong>{{ marked_count }}</strong> 张发票为「已报销」，不再参与下次凑票</div>
   {% endif %}
+  {% if duplicate_invoice_count %}
+  <div class="summary" style="color: #92400e;">
+    其中 <strong>{{ duplicate_invoice_count }}</strong> 张已出现在
+    {% for id in duplicate_batches %}<a href="/reimbursements/{{ id }}">#{{ id }}</a>{% if not loop.last %}、{% endif %}{% endfor %}
+    里。同一个单据需要改名单时，直接去那张单子上重新生成即可。
+  </div>
+  {% endif %}
   <div class="btn-group" style="margin-top: 12px;">
     {% for dl in download_links %}
     <a href="/export/download/{{ dl.filename }}" class="btn btn-success">{{ dl.label }}</a>

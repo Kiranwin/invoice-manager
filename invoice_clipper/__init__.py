@@ -1,9 +1,8 @@
 """
-发票夹子核心模块 - v3.5.0
+发票夹子核心模块 - v3.6.0
 提供发票处理、数据库操作、导出功能的统一入口
 """
 import os
-import sys
 import yaml
 from pathlib import Path
 
@@ -12,12 +11,11 @@ from .database import (
     init_db, set_backend, get_backend,
     insert_invoice,
     query_invoices,
-    update_invoice_status,
+    query_invoices_page,
+    invoice_stats,
     update_invoice,
     get_invoice_by_id,
     get_all_invoices,
-    get_distinct_projects,
-    get_distinct_persons,
     get_projects,
     add_project,
     delete_project,
@@ -29,7 +27,6 @@ from .database import (
     get_attachments,
     insert_attachment,
     delete_attachment,
-    delete_attachments_by_invoice,
     delete_invoice,
     get_tags,
     add_tag,
@@ -37,11 +34,10 @@ from .database import (
     get_invoice_tags,
     set_invoice_tags,
     get_invoices_by_ids,
-    search_invoices_by_tags,
     get_all_invoice_tags,
 )
 from .db_backends import DatabaseBackend, SQLiteBackend, PostgreSQLBackend
-from .exporter import export_excel, export_merged_pdf, build_export_label, export_zip_sources, export_bundle
+from .exporter import export_excel, export_merged_pdf, build_export_label, export_zip_sources, export_bundle, resolve_export_dir
 from .matcher import find_best_match, find_multiple_candidates
 from .file_utils import (
     ofd_to_pdf, extract_text_from_pdf,
@@ -97,7 +93,7 @@ DEFAULT_CONFIG = {
 
 
 def deep_merge(base: dict, override: dict) -> dict:
-    """递归合并两个字典。base 中的缺失字段由 override 补充，已存在的不覆盖。"""
+    """递归合并两个字典。override 优先，两边同为字典时逐层合并。"""
     result = dict(base)
     for key, val in override.items():
         if key in result and isinstance(result[key], dict) and isinstance(val, dict):
@@ -153,8 +149,8 @@ def load_config() -> dict:
         pkg_cfg_example = Path(__file__).parent / "config.example.yaml"
         if not pkg_cfg_example.exists():
             raise FileNotFoundError(
-                f"未找到内置示例配置，无法自动初始化。请运行 invoice-manager init。\n"
-                f"已查找:\n  " + "\n  ".join(str(c) for c in candidates)
+                "未找到内置示例配置，无法自动初始化。请手动创建 config/config.yaml。\n"
+                "已查找:\n  " + "\n  ".join(str(c) for c in candidates)
             )
 
         target = Path(root) / "config" / "config.yaml"
@@ -203,9 +199,9 @@ __all__ = [
     "InvoiceProcessor",
     # 数据库核心
     "init_db", "set_backend", "get_backend",
-    "insert_invoice", "query_invoices", "update_invoice_status",
+    "insert_invoice", "query_invoices",
+    "query_invoices_page", "invoice_stats",
     "update_invoice", "get_invoice_by_id", "get_all_invoices",
-    "get_distinct_projects", "get_distinct_persons",
     "is_duplicate", "exists_by_invoice_number",
     # 后端类
     "DatabaseBackend", "SQLiteBackend", "PostgreSQLBackend",
@@ -214,14 +210,15 @@ __all__ = [
     "get_persons", "add_person", "delete_person",
     # 附件
     "get_attachments", "insert_attachment",
-    "delete_attachment", "delete_attachments_by_invoice",
+    "delete_attachment",
     "delete_invoice",
     # 标签系统
     "get_tags", "add_tag", "delete_tag",
     "get_invoice_tags", "set_invoice_tags",
-    "get_invoices_by_ids", "search_invoices_by_tags", "get_all_invoice_tags",
+    "get_invoices_by_ids", "get_all_invoice_tags",
     # 导出
     "export_excel", "export_merged_pdf", "build_export_label", "export_zip_sources", "export_bundle",
+    "resolve_export_dir",
     # 凑票
     "find_best_match", "find_multiple_candidates",
     # 文件工具

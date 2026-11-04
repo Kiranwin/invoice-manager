@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""发票夹子 Web UI — FastAPI + Jinja2 (v3.5.0)"""
-import re
+"""发票夹子 Web UI — FastAPI + Jinja2 (v3.6.0)"""
 import json
+import logging
+import re
 import shutil
-import sys
-import os
 import webbrowser
-import tempfile
 from decimal import InvalidOperation
+from urllib.parse import urlencode
 from pathlib import Path
 from datetime import datetime
 
@@ -17,14 +16,14 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from invoice_clipper import (
-    load_config, init_db, query_invoices, update_invoice_status, update_invoice,
-    get_invoice_by_id, get_all_invoices, delete_invoice,
+    load_config, init_db, query_invoices, query_invoices_page, invoice_stats, update_invoice,
+    get_invoice_by_id,
     get_attachments, insert_attachment, delete_attachment,
     get_projects, add_project, delete_project,
     get_persons, add_person, delete_person,
     get_tags, add_tag, delete_tag, get_invoice_tags, set_invoice_tags,
-    get_all_invoice_tags, get_invoices_by_ids, search_invoices_by_tags,
-    InvoiceProcessor, build_export_label, export_bundle,
+    get_all_invoice_tags, get_invoices_by_ids,
+    InvoiceProcessor, build_export_label, export_bundle, resolve_export_dir,
     build_attachment_path, next_attachment_seq,
 )
 from contextlib import asynccontextmanager
@@ -34,15 +33,34 @@ from invoice_clipper.workflow import (
     change_invoice_state, delete_invoice_with_files, reimbursable_invoices,
     record_reimbursement, list_reimbursements, amount_cents,
     record_import_failure, list_import_failures, retry_import_failure,
+    delete_import_failure, purge_import_failures,
     BATCH_STATUS_LABELS,
     get_reimbursement, remove_invoices_from_reimbursement,
     add_invoices_to_reimbursement, set_reimbursement_status,
     update_reimbursement_note, void_reimbursement,
-    attach_reimbursement_files, batch_for_invoice,
+    attach_reimbursement_files, batch_for_invoice, open_batch_conflicts,
 )
+
+logger = logging.getLogger(__name__)
 
 # 包内资源路径（安装后模板/静态文件在包目录内）
 PKG_DIR = Path(__file__).parent
+
+# 识别失败记录的保留天数
+FAILURE_RETENTION_DAYS = 30
+
+# 识别引擎初始化不便宜，按配置缓存处理器，避免每次上传都重建
+_processor_cache: dict[str, InvoiceProcessor] = {}
+
+
+def get_processor(cfg: dict) -> InvoiceProcessor:
+    """复用同一套配置的 InvoiceProcessor（引擎与数据库连接不必每次上传重建）。"""
+    key = json.dumps({k: cfg.get(k) for k in ("storage", "ocr")}, sort_keys=True, default=str)
+    proc = _processor_cache.get(key)
+    if proc is None:
+        proc = InvoiceProcessor(cfg)
+        _processor_cache[key] = proc
+    return proc
 
 
 @asynccontextmanager
@@ -53,13 +71,18 @@ async def _lifespan(app: FastAPI):
     app.state.config_path = cfg_path
     init_db(cfg)
 
+    # 启动时清理过期的识别失败记录，避免 failed_imports 目录只进不出
+    purged = purge_import_failures(FAILURE_RETENTION_DAYS)
+    if purged:
+        logger.info("清理了 %d 条超过 %d 天的识别失败记录", purged, FAILURE_RETENTION_DAYS)
+
     # 提前调用确保 _session_manager 已创建
-    _mcp_starlette = mcp_server.streamable_http_app()
+    mcp_server.streamable_http_app()
     async with mcp_server._session_manager.run():
         yield  # 应用运行中
 
 
-app = FastAPI(title="发票夹子", version="3.5.0", lifespan=_lifespan)
+app = FastAPI(title="发票夹子", version="3.6.0", lifespan=_lifespan)
 app.mount("/static", StaticFiles(directory=str(PKG_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(PKG_DIR / "templates"))
 
@@ -95,6 +118,40 @@ def build_filters(request: Request) -> dict:
         if val:
             f[key] = val
     return f
+
+
+STATUS_NAME_TO_STATE = {"待确认": "pending", "正常": "ready",
+                        "排除": "excluded", "已报销": "reported"}
+LIST_SORT_FIELDS = {"invoice_date", "amount_with_tax", "seller_name",
+                    "belong_project", "status"}
+LIST_PAGE_SIZES = (20, 50, 100, 200)
+
+
+def parse_amount_filter(raw: str) -> tuple[int | None, int | None]:
+    """把金额输入解析为 (最小分, 最大分)。
+
+    支持 `100` / `>=100` / `<=100` / `>100` / `<100` / `100-200`，
+    空输入返回 (None, None)，格式错误抛 ValueError。
+    """
+    text = (raw or "").replace("¥", "").replace("￥", "").replace(",", "").strip()
+    if not text:
+        return None, None
+
+    def cents(part: str) -> int:
+        return amount_cents(part.strip())
+
+    if text.startswith((">=", "<=")):
+        value = cents(text[2:])
+        return (value, None) if text[0] == ">" else (None, value)
+    if text[0] in "><":
+        value = cents(text[1:])
+        return (value + 1, None) if text[0] == ">" else (None, max(0, value - 1))
+    if "-" in text:
+        low, _, high = text.partition("-")
+        low_cents, high_cents = cents(low), cents(high)
+        return (min(low_cents, high_cents), max(low_cents, high_cents))
+    value = cents(text)
+    return value, value
 
 
 # ── Attachment serving ───────────────────────────
@@ -142,7 +199,34 @@ def root():
 
 def _pending_invoices() -> list[dict]:
     """Return invoices that still need a human confirmation."""
-    return [i for i in get_all_invoices() if i.get("status") == "pending"]
+    return query_invoices({"statuses": ["pending"], "only_included": False})
+
+
+def _human_size(size: int) -> str:
+    if size < 1024:
+        return f"{size} B"
+    if size < 1024 * 1024:
+        return f"{size / 1024:.0f} KB"
+    return f"{size / 1024 / 1024:.2f} MB"
+
+
+def _failure_context() -> dict:
+    """识别失败区的展示数据：记录列表 + 占用体积。"""
+    failures = list_import_failures()
+    total_bytes = 0
+    for item in failures:
+        try:
+            path = Path(item["stored_path"])
+            if path.is_file():
+                total_bytes += path.stat().st_size
+        except OSError:
+            continue
+    return {
+        "failures": failures,
+        "failure_bytes": total_bytes,
+        "failure_size_label": _human_size(total_bytes),
+        "failure_retention_days": FAILURE_RETENTION_DAYS,
+    }
 
 
 @app.get("/inbox")
@@ -154,9 +238,9 @@ def get_inbox(request: Request):
         "results": None,
         "summary": None,
         "pending_invoices": _pending_invoices(),
-        "failures": list_import_failures(),
         "projects": get_projects(),
         "persons": get_persons(),
+        **_failure_context(),
     })
     return templates.TemplateResponse(request, "scan.html", ctx)
 
@@ -168,7 +252,7 @@ async def post_scan(request: Request, files: list[UploadFile] = File(...)):
     belong_project = form.get("belong_project", "").strip()
     belong_person = form.get("belong_person", "").strip()
 
-    proc = InvoiceProcessor(cfg)
+    proc = get_processor(cfg)
     results = []
 
     for f in files:
@@ -185,6 +269,7 @@ async def post_scan(request: Request, files: list[UploadFile] = File(...)):
         with open(tmp, "wb") as fp:
             shutil.copyfileobj(f.file, fp)
         r = None
+        error = None
         try:
             r = proc.process_file(tmp, source="web")
             if r and (belong_project or belong_person):
@@ -196,22 +281,28 @@ async def post_scan(request: Request, files: list[UploadFile] = File(...)):
                 update_invoice(r["id"], updates)
                 r.update(updates)
             if r is None:
-                record_import_failure(f.filename or tmp.name, tmp, proc._error or "识别失败")
-            results.append({
-                "id": r.get("id", "?") if r else "?",
-                "filename": f.filename or "-",
-                "ok": r is not None,
-                "error": proc._error if not r else None,
-                "invoice_number": r.get("invoice_number", "-") if r else "-",
-                "invoice_date": r.get("invoice_date", "-") if r else "-",
-                "seller_name": r.get("seller_name", "-") if r else "-",
-                "amount_with_tax": r.get("amount_with_tax", 0) if r else 0,
-                "belong_project": belong_project or "",
-                "belong_person": belong_person or "",
-            })
-        finally:
+                error = proc._error or "识别失败"
+                record_import_failure(f.filename or tmp.name, tmp, error)
+        except Exception as exc:
+            # 单个文件的意外异常不能拖垮整批上传
+            logger.exception("处理文件失败: %s", f.filename)
+            error = f"处理异常: {exc}"
+            record_import_failure(f.filename or tmp.name, tmp, error)
+        else:
             if r is not None:
                 tmp.unlink(missing_ok=True)
+        results.append({
+            "id": r.get("id", "?") if r else "?",
+            "filename": f.filename or "-",
+            "ok": r is not None,
+            "error": error,
+            "invoice_number": r.get("invoice_number", "-") if r else "-",
+            "invoice_date": r.get("invoice_date", "-") if r else "-",
+            "seller_name": r.get("seller_name", "-") if r else "-",
+            "amount_with_tax": r.get("amount_with_tax", 0) if r else 0,
+            "belong_project": belong_project or "",
+            "belong_person": belong_person or "",
+        })
 
     ok_count = sum(1 for r in results if r["ok"])
     ctx = get_flash(request)
@@ -220,9 +311,9 @@ async def post_scan(request: Request, files: list[UploadFile] = File(...)):
         "results": results,
         "summary": {"ok_count": ok_count, "total_count": len(results)},
         "pending_invoices": _pending_invoices(),
-        "failures": list_import_failures(),
         "projects": get_projects(),
         "persons": get_persons(),
+        **_failure_context(),
     })
     return templates.TemplateResponse(request, "scan.html", ctx)
 
@@ -238,74 +329,113 @@ def retry_failed_import(request: Request, failure_id: int):
     return flash_redirect("/inbox", "重试仍未识别成功，请检查识别引擎配置或文件内容", "warning")
 
 
+@app.post("/inbox/failures/{failure_id}/delete")
+def delete_failed_import(failure_id: int):
+    """忽略一条失败记录，同时清掉 failed_imports 里的原文件。"""
+    if delete_import_failure(failure_id):
+        return flash_redirect("/inbox", "已删除失败记录与原文件")
+    return flash_redirect("/inbox", "失败记录不存在", "warning")
+
+
+@app.post("/inbox/failures/purge")
+def purge_failed_imports():
+    removed = purge_import_failures(FAILURE_RETENTION_DAYS)
+    if not removed:
+        return flash_redirect("/inbox", f"没有超过 {FAILURE_RETENTION_DAYS} 天的失败记录", "warning")
+    return flash_redirect(
+        "/inbox", f"已清理 {removed} 条超过 {FAILURE_RETENTION_DAYS} 天的失败记录")
+
+
 @app.get("/list")
-def get_list(request: Request, search: str = "", status: list[str] = Query(default=["待确认", "正常"])):
+def get_list(request: Request,
+             search: str = "",
+             status: list[str] = Query(default=["待确认", "正常"]),
+             sort: str = "invoice_date",
+             dir: str = "desc",
+             page: int = 1,
+             per_page: int = 50):
     filters = build_filters(request)
-    amount_filter = request.query_params.get("amount", "").strip()
     filters["only_included"] = False
-    invoices = query_invoices(filters) if any(k != "only_included" for k in filters) else get_all_invoices()
+    filters["search"] = search.strip()
+    filters["statuses"] = sorted({STATUS_NAME_TO_STATE[name] for name in status
+                                  if name in STATUS_NAME_TO_STATE})
+
+    amount_filter = request.query_params.get("amount", "").strip()
     tag_id = request.query_params.get("tag_id", "")
+    invalid_amount = False
+    try:
+        min_cents, max_cents = parse_amount_filter(amount_filter)
+    except (TypeError, ValueError, InvalidOperation):
+        min_cents = max_cents = None
+        invalid_amount = True
+    if min_cents is not None:
+        filters["amount_min_cents"] = min_cents
+    if max_cents is not None:
+        filters["amount_max_cents"] = max_cents
     if tag_id.isdigit():
-        tagged_ids = {i["id"] for i in search_invoices_by_tags([int(tag_id)])}
-        invoices = [i for i in invoices if i["id"] in tagged_ids]
-    invoices.sort(key=lambda i: i.get("invoice_date") or "", reverse=True)
+        filters["tag_id"] = int(tag_id)
 
-    state_names = {"待确认": "pending", "正常": "ready", "排除": "excluded", "已报销": "reported"}
-    selected_states = {state_names[name] for name in status if name in state_names}
-    invoices = [i for i in invoices if i.get("status") in selected_states]
+    sort = sort if sort in LIST_SORT_FIELDS else "invoice_date"
+    dir = "asc" if str(dir).lower() == "asc" else "desc"
+    per_page = per_page if per_page in LIST_PAGE_SIZES else 50
+    page = max(1, int(page or 1))
 
-    # 金额按分精确匹配，避免浮点数比较误差。
-    if amount_filter:
-        try:
-            amount_cents_filter = amount_cents(amount_filter.replace(",", ""))
-            invoices = [i for i in invoices if amount_cents(i.get("amount_with_tax")) == amount_cents_filter]
-        except (TypeError, ValueError, InvalidOperation):
-            invoices = []
+    if invalid_amount:
+        invoices, total, page, total_pages = [], 0, 1, 1
+    else:
+        invoices, total, page, total_pages = query_invoices_page(
+            filters, sort, dir, page, per_page)
 
-    search_lower = search.strip().lower()
-    if search_lower:
-        search_amount_cents = None
-        try:
-            search_amount_cents = amount_cents(search_lower.replace("¥", "").replace(",", ""))
-        except (TypeError, ValueError, InvalidOperation):
-            pass
-        invoices = [
-            i for i in invoices
-            if (search_lower in (i.get("seller_name") or "").lower()
-                or search_lower in (i.get("buyer_name") or "").lower()
-                or search_lower in (i.get("invoice_number") or "").lower()
-                or search_lower in (i.get("commodity_name") or "").lower()
-                or (search_amount_cents is not None
-                    and amount_cents(i.get("amount_with_tax")) == search_amount_cents))
-        ]
+    def make_url(**overrides) -> str:
+        """带上当前全部筛选项重新拼一个 URL，用于排序与翻页。"""
+        pairs = list(request.query_params.multi_items())
+        for key, value in overrides.items():
+            pairs = [(k, v) for k, v in pairs if k != key]
+            if value not in (None, ""):
+                pairs.append((key, str(value)))
+        query = urlencode(pairs)
+        return "/list" + (f"?{query}" if query else "")
 
-    all_invs = get_all_invoices()
-    total = len(all_invs)
-    ok = sum(1 for i in all_invs if i.get("status") == "ready")
-    excluded = sum(1 for i in all_invs if i.get("status") == "excluded")
-    pending = sum(1 for i in all_invs if i.get("status") == "pending")
-    reported = sum(1 for i in all_invs if i.get("status") == "reported")
-    reimbursable = sum(i.get("amount_with_tax") or 0 for i in all_invs if i.get("status") == "ready")
-    total_amount = sum(i.get("amount_with_tax") or 0 for i in all_invs)
+    sort_links = {}
+    for field in ("invoice_date", "seller_name", "amount_with_tax", "belong_project", "status"):
+        active = (field == sort)
+        next_dir = "asc" if (active and dir == "desc") else "desc"
+        sort_links[field] = {
+            "url": make_url(sort=field, dir=next_dir, page=1),
+            "active": active,
+            "dir": dir,
+        }
+
+    page_urls = {n: make_url(page=n) for n in range(1, total_pages + 1)} if total_pages <= 9 else {}
 
     ctx = get_flash(request)
     ctx.update({
         "page": "list",
         "invoices": invoices,
-        "search": search, "status_filter": status,
+        "search": search,
+        "status_filter": status,
         "filters": {key: request.query_params.get(key, "") for key in
                     ("date_from", "date_to", "seller", "buyer", "project", "person")},
         "amount_filter": amount_filter,
+        "invalid_amount": invalid_amount,
         "tag_id": tag_id,
         "all_tags": get_tags(),
         "invoice_tags": get_all_invoice_tags(),
         "projects": get_projects(),
         "persons": get_persons(),
-        "stats": {
-            "total": total, "ok_count": ok, "excluded_count": excluded,
-            "pending_count": pending, "reported_count": reported,
-            "reimbursable_amount": reimbursable, "total_amount": total_amount,
-        },
+        "stats": invoice_stats(),
+        "sort": sort,
+        "dir": dir,
+        "sort_links": sort_links,
+        "page_no": page,
+        "per_page": per_page,
+        "page_sizes": LIST_PAGE_SIZES,
+        "total": total,
+        "total_pages": total_pages,
+        "page_urls": page_urls,
+        "make_page_url": make_url,
+        "prev_url": make_url(page=page - 1) if page > 1 else None,
+        "next_url": make_url(page=page + 1) if page < total_pages else None,
     })
     return templates.TemplateResponse(request, "list.html", ctx)
 
@@ -442,7 +572,6 @@ def set_invoice_tags_route(request: Request, inv_id: int, tag_ids: list[int] = F
 
 @app.get("/list/{inv_id}")
 def get_edit(request: Request, inv_id: int):
-    cfg = request.app.state.config
     inv = get_invoice_by_id(inv_id)
     if not inv:
         raise HTTPException(404, "发票不存在")
@@ -466,7 +595,6 @@ def get_edit(request: Request, inv_id: int):
 
 @app.post("/list/{inv_id}")
 async def post_edit(request: Request, inv_id: int):
-    cfg = request.app.state.config
     form = await request.form()
     updates = {}
     for field in INVOICE_FIELDS:
@@ -494,7 +622,6 @@ async def post_edit(request: Request, inv_id: int):
 
 @app.post("/list/{inv_id}/toggle")
 def toggle_status(request: Request, inv_id: int):
-    cfg = request.app.state.config
     inv = get_invoice_by_id(inv_id)
     if not inv:
         raise HTTPException(404)
@@ -534,7 +661,6 @@ def delete_invoice_route(request: Request, inv_id: int):
 async def upload_attachments(request: Request, inv_id: int,
                               files: list[UploadFile] = File(...),
                               file_type: str = Form("other")):
-    cfg = request.app.state.config
     inv = get_invoice_by_id(inv_id)
     if not inv:
         raise HTTPException(404)
@@ -571,7 +697,6 @@ async def upload_attachments(request: Request, inv_id: int,
 
 @app.post("/list/{inv_id}/attachments/{att_id}/delete")
 def delete_attachment_route(request: Request, inv_id: int, att_id: int):
-    cfg = request.app.state.config
     atts = get_attachments(inv_id)
     target = next((a for a in atts if a["id"] == att_id), None)
     if target:
@@ -585,18 +710,13 @@ def delete_attachment_route(request: Request, inv_id: int, att_id: int):
 # ── 导出辅助 ──────────────────────────────────
 
 
-def _export_dir(cfg: dict) -> Path:
-    configured = cfg.get("storage", {}).get("export_dir")
-    return Path(configured).expanduser() if configured else Path.home() / "Documents" / "发票夹子" / "exports"
-
-
 def build_export_files(cfg: dict, invoices: list, label: str,
                        export_mode: str, package_mode: str) -> list[dict]:
     """生成一套导出文件。首次导出与报销单重新生成共用这条路径。"""
     attachments_map = None
     if export_mode == "with_attachments":
         attachments_map = {inv["id"]: get_attachments(inv["id"]) for inv in invoices}
-    return export_bundle(invoices, _export_dir(cfg), label, export_mode,
+    return export_bundle(invoices, resolve_export_dir(cfg), label, export_mode,
                          package_mode, attachments_map)
 
 
@@ -706,6 +826,11 @@ async def post_export(request: Request):
         return flash_redirect("/export", str(exc), "warning")
     marked_count = len(invoices) if mark_reported else 0
 
+    # 提醒已出现在其它未作废报销单里的发票，避免同一张票重复提交
+    conflicts = open_batch_conflicts([i["id"] for i in invoices])
+    duplicate_batches = sorted({b for batch_ids in conflicts.values() for b in batch_ids
+                                if b != batch_id})
+
     ctx = get_flash(request)
     ctx.update({
         "page": "export",
@@ -720,6 +845,8 @@ async def post_export(request: Request):
         "required_numbers_set": set(),
         "marked_count": marked_count,
         "batch_id": batch_id,
+        "duplicate_invoice_count": len(conflicts),
+        "duplicate_batches": duplicate_batches,
         "history": list_reimbursements(),
         "target_amount": "",
         "max_count": 0,
@@ -731,7 +858,7 @@ async def post_export(request: Request):
 
 @app.get("/export/download/{filename}")
 def download_export(request: Request, filename: str):
-    export_dir = _export_dir(request.app.state.config)
+    export_dir = resolve_export_dir(request.app.state.config)
     filepath = export_dir / filename
     if not filepath.resolve().is_relative_to(export_dir.resolve()):
         raise HTTPException(404)
@@ -894,7 +1021,6 @@ async def post_rebuild_reimbursement(request: Request, batch_id: int):
 
 @app.post("/export/match")
 async def post_match_amount(request: Request):
-    cfg = request.app.state.config
     form = await request.form()
 
     try:
@@ -991,7 +1117,7 @@ def main():
     port = int(cfg.get("server", {}).get("port", 8000))
 
     url = f"http://{host}:{port}"
-    print(f"发票夹子 v3.5.0 正在启动 ...")
+    print("发票夹子 v3.6.0 正在启动 ...")
     print(f"   配置文件: {cfg_path}")
     print(f"   本地地址: {url}")
 

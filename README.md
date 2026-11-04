@@ -2,7 +2,7 @@
   <img src="https://img.shields.io/badge/Python-3.12+-blue.svg" alt="Python 3.12+">
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License">
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg" alt="Platform">
-  <img src="https://img.shields.io/badge/Version-3.5.0-brightgreen.svg" alt="v3.5.0">
+  <img src="https://img.shields.io/badge/Version-3.6.0-brightgreen.svg" alt="v3.6.0">
 </p>
 
 <h1 align="center">发票夹子 🧾</h1>
@@ -10,7 +10,7 @@
 <p align="center">
   <strong>轻量级发票识别与管理工具</strong><br>
   本地优先 · 三级引擎降级 · 标签系统 · 智能凑票 · 一键导出<br>
-  支持 SQLite / PostgreSQL · Web UI + CLI 双入口
+  支持 SQLite / PostgreSQL · Web UI + MCP 双入口
 </p>
 
 ---
@@ -20,7 +20,7 @@
 | 功能 | 说明 |
 |------|------|
 | 🖥️ **Web UI** | FastAPI 可视化界面，拖拽上传、表格编辑、一键导出 |
-| ⌨️ **CLI + MCP** | 命令行批量处理 + AI Agent 接口 (MCP协议) |
+| ⌨️ **MCP 接口** | AI Agent 接口（MCP 协议），可调用扫描、查询、编辑、导出全流程 |
 | 🔍 **三级识别引擎** | 百度 OCR → 大模型视觉 → 本地 OCR，自动降级 |
 | 📁 **智能归档** | `年份/日期_金额_销售方_发票号.pdf` 自动整理 |
 | 🏷️ **标签系统** | 自定义彩色标签，快速分类和筛选发票 |
@@ -37,7 +37,7 @@
 
 ```bash
 # 从 Wheel 包安装
-pip install dist/invoice_manager-3.5.0-py3-none-any.whl
+pip install dist/invoice_manager-3.6.0-py3-none-any.whl
 ```
 
 ### 启动 Web UI
@@ -54,29 +54,6 @@ uv run python -m invoice_clipper
 ```
 
 浏览器打开 http://localhost:8000
-
-### CLI 日常使用
-
-```bash
-# 扫描监控目录中的发票
-uv run python invoice_clipper/__main__.py scan
-
-# 列出所有发票
-uv run python invoice_clipper/__main__.py list
-
-# 按条件查询
-uv run python invoice_clipper/__main__.py query --from 2025-01-01 --to 2025-12-31 --seller "科技公司"
-
-# 处理单个文件
-uv run python invoice_clipper/__main__.py process invoice.pdf
-
-# 标记排除/恢复报销
-uv run python invoice_clipper/__main__.py exclude 3
-uv run python invoice_clipper/__main__.py include 3
-
-# 导出报销
-uv run python invoice_clipper/__main__.py export --from 2025-03 --format both
-```
 
 ---
 
@@ -139,7 +116,7 @@ mcp:
 
 ### 可用工具
 
-MCP Server 暴露以下工具，覆盖发票管理全流程：
+MCP Server 暴露以下 23 个工具，覆盖发票管理全流程：
 
 | 分类 | 工具 | 说明 |
 |------|------|------|
@@ -170,15 +147,14 @@ MCP Server 暴露以下工具，覆盖发票管理全流程：
 ### Wheel 包（推荐）
 
 ```bash
-pip install dist/invoice_manager-3.5.0-py3-none-any.whl
+pip install dist/invoice_manager-3.6.0-py3-none-any.whl
 ```
 
 安装后可用命令：
 
 | 命令 | 说明 |
 |------|------|
-| `invoice-manager scan/list/...` | CLI 操作 |
-| `invoice-manager-web` | 启动 Web UI |
+| `invoice-manager-web` | 启动 Web UI（含 MCP 接口） |
 
 ### 源码开发
 
@@ -252,7 +228,7 @@ invoice-manager/
 │   ├── __init__.py               # load_config + 所有模块导出
 │   ├── __main__.py               # pip 入口点
 │   ├── __run__.py                # 进程锁启动入口（支持 --debug）
-│   ├── web.py                    # FastAPI Web UI (v3.5.0)
+│   ├── web.py                    # FastAPI Web UI (v3.6.0)
 │   ├── mcp_server.py             # MCP AI Agent 接口
 │   ├── database.py               # 数据库调度层
 │   ├── db_backends.py            # SQLite + PostgreSQL 后端
@@ -280,7 +256,7 @@ invoice-manager/
 │       ├── baidu_ocr.py          # 百度 OCR
 │       └── llm_vision.py         # 大模型视觉
 └── dist/
-    └── invoice_manager-3.5.0-py3-none-any.whl
+    └── invoice_manager-3.6.0-py3-none-any.whl
 ```
 
 ---
@@ -303,6 +279,20 @@ invoice-manager/
 - `easyofd` → OFD 电子发票格式支持
 - `psycopg2-binary` → PostgreSQL 支持
 - `paddlepaddle` + `paddleocr` → 本地离线 OCR
+
+---
+
+## 🎯 v3.6.0 新增功能
+
+| 功能 | 说明 |
+|------|------|
+| 📄 **发票库分页** | 列表改为服务端分页与排序，可选 20/50/100/200 条每页；排序与筛选可同时生效 |
+| 🔢 **金额区间筛选** | 金额输入支持 `100`、`>=100`、`<=100`、`100-200` 四种写法，搜索框回归纯文本检索，不再兼做金额匹配 |
+| 🗑️ **失败记录可清理** | 识别失败项可单条删除（连同原文件），启动时自动清理超过 30 天的记录，并显示占用体积 |
+| 🛡️ **导入异常隔离** | 单个文件识别异常不再导致整批上传 500，失败项照常进入失败记录 |
+| 🤖 **MCP 导出对齐** | MCP 导出改用 `storage.export_dir`，并像 Web 一样记录报销单与导出模式 |
+| ⚡ **初始化去重** | 同一进程内重复初始化不再重跑建表 DDL；识别引擎按配置缓存复用 |
+| 🧹 **冗余清理** | 删除 10 组无引用样式、6 个无调用函数、多处重复实现（发票查询、导出编排、导出目录），README 移除已不存在的 CLI 章节 |
 
 ---
 
@@ -334,7 +324,7 @@ invoice-manager/
 
 | 功能 | 说明 |
 |------|------|
-| 🤖 **MCP 文档完善** | 补充 MCP AI Agent 接口完整文档（启动方式、客户端接入、18 个工具清单） |
+| 🤖 **MCP 文档完善** | 补充 MCP AI Agent 接口完整文档（启动方式、客户端接入、23 个工具清单） |
 | ✅ **导出标记已报销** | 导出时可勾选「标记为已报销」，已报销发票不再参与下次凑票 |
 | 🐛 **凑票下载 404 修复** | 修复智能凑票导出源文件 ZIP 返回 404 的问题 |
 | 🎨 **工作台 UI 重构** | 统一收件箱、发票库、报销单和设置的应用壳层与详情页 |

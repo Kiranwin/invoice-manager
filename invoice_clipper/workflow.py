@@ -181,6 +181,11 @@ def batch_for_invoice(invoice_id: int) -> int | None:
     return get_backend().find_batch_for_invoice(invoice_id)
 
 
+def open_batch_conflicts(invoice_ids: list[int]) -> dict[int, list[int]]:
+    """导出前检查：这些发票已经在哪些未作废的报销单里。"""
+    return get_backend().invoices_in_open_batches(invoice_ids)
+
+
 # ── 导入失败重试 ──────────────────────────────────
 
 
@@ -205,6 +210,33 @@ def retry_import_failure(config: dict, failure_id: int) -> dict | None:
     if result:
         backend.delete_import_failure(failure_id)
     return result
+
+
+def delete_import_failure(failure_id: int) -> bool:
+    """手动忽略一条失败记录，连同留在 failed_imports 里的原文件一起清掉。"""
+    backend = get_backend()
+    failure = next((row for row in backend.list_import_failures() if row["id"] == failure_id), None)
+    if not failure:
+        return False
+    backend.delete_import_failure(failure_id)
+    try:
+        Path(failure["stored_path"]).unlink(missing_ok=True)
+    except OSError:
+        pass
+    return True
+
+
+def purge_import_failures(days: int = 30) -> int:
+    """清理超过指定天数的失败记录与对应的遗留文件。"""
+    if days < 0:
+        raise ValueError("保留天数不能为负数")
+    rows = get_backend().purge_import_failures(days)
+    for row in rows:
+        try:
+            Path(row["stored_path"]).unlink(missing_ok=True)
+        except OSError:
+            pass
+    return len(rows)
 
 
 def delete_invoice_with_files(invoice_id: int) -> bool:
@@ -237,7 +269,8 @@ __all__ = [
     "get_reimbursement", "remove_invoices_from_reimbursement",
     "add_invoices_to_reimbursement", "set_reimbursement_status",
     "update_reimbursement_note", "void_reimbursement",
-    "attach_reimbursement_files", "batch_for_invoice",
+    "attach_reimbursement_files", "batch_for_invoice", "open_batch_conflicts",
     "record_import_failure", "list_import_failures", "retry_import_failure",
+    "delete_import_failure", "purge_import_failures",
     "delete_invoice_with_files",
 ]
