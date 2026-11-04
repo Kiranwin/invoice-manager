@@ -11,7 +11,7 @@ from pathlib import Path
 from datetime import datetime
 
 from fastapi import FastAPI, Request, Form, File, UploadFile, Query, HTTPException
-from fastapi.responses import RedirectResponse, FileResponse
+from fastapi.responses import RedirectResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -92,7 +92,8 @@ app.mount("/mcp", mcp_server.streamable_http_app())
 
 # ── Helpers ───────────────────────────────────────
 def flash_redirect(url: str, message: str, msg_type: str = "success") -> RedirectResponse:
-    return RedirectResponse(f"{url}?message={message}&msg_type={msg_type}", status_code=303)
+    sep = "&" if "?" in url else "?"
+    return RedirectResponse(f"{url}{sep}message={message}&msg_type={msg_type}", status_code=303)
 
 
 def get_flash(request: Request) -> dict:
@@ -210,6 +211,65 @@ def _human_size(size: int) -> str:
     return f"{size / 1024 / 1024:.2f} MB"
 
 
+ALLOWED_UPLOAD_SUFFIXES = {".pdf", ".ofd", ".png", ".jpg", ".jpeg", ".bmp", ".tiff"}
+
+
+def _ingest_upload(cfg: dict, upload: UploadFile, belong_project: str,
+                   belong_person: str) -> dict:
+    """处理单个上传文件，返回一份结果记录。任何异常都转成失败结果，不向外抛。"""
+    filename = upload.filename or "-"
+    suffix = Path(filename).suffix.lower()
+    result = {
+        "filename": filename, "ok": False, "error": None, "id": "?",
+        "invoice_number": "-", "invoice_date": "-", "seller_name": "-",
+        "amount_with_tax": 0,
+        "belong_project": belong_project or "", "belong_person": belong_person or "",
+    }
+    if suffix not in ALLOWED_UPLOAD_SUFFIXES:
+        result["error"] = "不支持的文件类型"
+        return result
+
+    failed_dir = Path(cfg["storage"]["base_dir"]).expanduser() / "failed_imports"
+    failed_dir.mkdir(parents=True, exist_ok=True)
+    tmp = failed_dir / f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}{suffix}"
+    with open(tmp, "wb") as fp:
+        shutil.copyfileobj(upload.file, fp)
+
+    proc = get_processor(cfg)
+    record = None
+    try:
+        record = proc.process_file(tmp, source="web")
+        if record and (belong_project or belong_person):
+            updates = {}
+            if belong_project:
+                updates["belong_project"] = belong_project
+            if belong_person:
+                updates["belong_person"] = belong_person
+            update_invoice(record["id"], updates)
+            record.update(updates)
+        if record is None:
+            result["error"] = proc._error or "识别失败"
+            record_import_failure(filename, tmp, result["error"])
+    except Exception as exc:
+        # 单个文件的意外异常不能拖垮整批上传
+        logger.exception("处理文件失败: %s", filename)
+        result["error"] = f"处理异常: {exc}"
+        record_import_failure(filename, tmp, result["error"])
+    else:
+        if record is not None:
+            tmp.unlink(missing_ok=True)
+
+    if record:
+        result.update({
+            "ok": True, "error": None, "id": record.get("id", "?"),
+            "invoice_number": record.get("invoice_number") or "-",
+            "invoice_date": record.get("invoice_date") or "-",
+            "seller_name": record.get("seller_name") or "-",
+            "amount_with_tax": record.get("amount_with_tax") or 0,
+        })
+    return result
+
+
 def _failure_context() -> dict:
     """识别失败区的展示数据：记录列表 + 占用体积。"""
     failures = list_import_failures()
@@ -252,58 +312,7 @@ async def post_scan(request: Request, files: list[UploadFile] = File(...)):
     belong_project = form.get("belong_project", "").strip()
     belong_person = form.get("belong_person", "").strip()
 
-    proc = get_processor(cfg)
-    results = []
-
-    for f in files:
-        suffix = Path(f.filename or "").suffix.lower()
-        if suffix not in {".pdf", ".ofd", ".png", ".jpg", ".jpeg", ".bmp", ".tiff"}:
-            results.append({"id": "?", "filename": f.filename or "-", "ok": False,
-                            "error": "不支持的文件类型", "invoice_number": "-", "invoice_date": "-",
-                            "seller_name": "-", "amount_with_tax": 0,
-                            "belong_project": "", "belong_person": ""})
-            continue
-        failed_dir = Path(cfg["storage"]["base_dir"]).expanduser() / "failed_imports"
-        failed_dir.mkdir(parents=True, exist_ok=True)
-        tmp = failed_dir / f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}{suffix}"
-        with open(tmp, "wb") as fp:
-            shutil.copyfileobj(f.file, fp)
-        r = None
-        error = None
-        try:
-            r = proc.process_file(tmp, source="web")
-            if r and (belong_project or belong_person):
-                updates = {}
-                if belong_project:
-                    updates["belong_project"] = belong_project
-                if belong_person:
-                    updates["belong_person"] = belong_person
-                update_invoice(r["id"], updates)
-                r.update(updates)
-            if r is None:
-                error = proc._error or "识别失败"
-                record_import_failure(f.filename or tmp.name, tmp, error)
-        except Exception as exc:
-            # 单个文件的意外异常不能拖垮整批上传
-            logger.exception("处理文件失败: %s", f.filename)
-            error = f"处理异常: {exc}"
-            record_import_failure(f.filename or tmp.name, tmp, error)
-        else:
-            if r is not None:
-                tmp.unlink(missing_ok=True)
-        results.append({
-            "id": r.get("id", "?") if r else "?",
-            "filename": f.filename or "-",
-            "ok": r is not None,
-            "error": error,
-            "invoice_number": r.get("invoice_number", "-") if r else "-",
-            "invoice_date": r.get("invoice_date", "-") if r else "-",
-            "seller_name": r.get("seller_name", "-") if r else "-",
-            "amount_with_tax": r.get("amount_with_tax", 0) if r else 0,
-            "belong_project": belong_project or "",
-            "belong_person": belong_person or "",
-        })
-
+    results = [_ingest_upload(cfg, upload, belong_project, belong_person) for upload in files]
     ok_count = sum(1 for r in results if r["ok"])
     ctx = get_flash(request)
     ctx.update({
@@ -316,6 +325,15 @@ async def post_scan(request: Request, files: list[UploadFile] = File(...)):
         **_failure_context(),
     })
     return templates.TemplateResponse(request, "scan.html", ctx)
+
+
+@app.post("/inbox/api")
+async def post_scan_one(request: Request, file: UploadFile = File(...),
+                        belong_project: str = Form(""), belong_person: str = Form("")):
+    """单文件上传接口：前端逐个文件调用，用来显示进度与逐张结果。"""
+    result = _ingest_upload(request.app.state.config, file,
+                            belong_project.strip(), belong_person.strip())
+    return JSONResponse(result)
 
 
 @app.post("/inbox/failures/{failure_id}/retry")
@@ -710,6 +728,18 @@ def delete_attachment_route(request: Request, inv_id: int, att_id: int):
 # ── 导出辅助 ──────────────────────────────────
 
 
+def _download_label(filename: str) -> str:
+    if filename.startswith("报销明细_"):
+        return "下载 Excel"
+    if filename.startswith("报销发票_"):
+        return "下载合并 PDF"
+    if filename.startswith("源文件_"):
+        return "下载源文件 ZIP"
+    if filename.startswith("发票附件_"):
+        return "下载附件 ZIP"
+    return "下载文件"
+
+
 def build_export_files(cfg: dict, invoices: list, label: str,
                        export_mode: str, package_mode: str) -> list[dict]:
     """生成一套导出文件。首次导出与报销单重新生成共用这条路径。"""
@@ -756,11 +786,44 @@ def get_export(request: Request):
     if invalid_required:
         ctx.update({"message": "部分必选发票号码不可用，请重新从发票库选择", "msg_type": "warning"})
 
+    # 刚生成或从历史点进来的报销单：直接从库里渲染，刷新不会重复生成
+    result_batch = None
+    batch_param = request.query_params.get("batch", "")
+    if batch_param.isdigit():
+        result_batch = get_reimbursement(int(batch_param))
+
+    download_links = None
+    invoice_count = None
+    total_amount_value = 0.0
+    marked_count = 0
+    result_batch_id = None
+    duplicate_invoice_count = 0
+    duplicate_batches: list[int] = []
+    if result_batch:
+        download_links = [{"label": _download_label(name), "filename": name}
+                          for name in result_batch["files"]]
+        invoice_count = result_batch["item_count"]
+        total_amount_value = result_batch["total_cents"] / 100
+        marked_count = invoice_count if result_batch["status"] == "reported" else 0
+        result_batch_id = result_batch["id"]
+        conflicts = open_batch_conflicts([item["id"] for item in result_batch["items"]])
+        duplicate_batches = sorted({b for ids in conflicts.values() for b in ids
+                                    if b != result_batch_id})
+        duplicate_invoice_count = sum(
+            1 for ids in conflicts.values() if any(b != result_batch_id for b in ids))
+
     ctx.update({
         "page": "export",
         "filters": {"date_from": "", "date_to": "", "seller": "", "buyer": "",
                      "project": "", "person": ""},
-        "download_links": None, "invoice_count": None, "total_amount": 0.0,
+        "download_links": download_links,
+        "invoice_count": invoice_count,
+        "total_amount": total_amount_value,
+        "marked_count": marked_count,
+        "batch_id": result_batch_id,
+        "result_batch": result_batch,
+        "duplicate_invoice_count": duplicate_invoice_count,
+        "duplicate_batches": duplicate_batches,
         "selected_invoices": selected_invoices,
         "selected_ids": selected_ids_param,
         "required_invoices": required_invoices,
@@ -798,7 +861,6 @@ async def post_export(request: Request):
         filters["only_included"] = True
         invoices = reimbursable_invoices(filters)
 
-    total_amount = sum(amount_cents(i.get("amount_with_tax")) for i in invoices) / 100
     if not invoices:
         return flash_redirect("/export", "没有符合条件的发票", "warning")
 
@@ -813,7 +875,6 @@ async def post_export(request: Request):
         links = build_export_files(cfg, invoices, label, export_mode, package_mode)
     except Exception as e:
         return flash_redirect("/export", f"导出失败: {e}", "error")
-    download_links = [{"label": link["label"], "filename": link["filename"]} for link in links]
 
     mark_reported = _truthy(form.get("mark_reported"))
     try:
@@ -824,36 +885,12 @@ async def post_export(request: Request):
         )
     except ValueError as exc:
         return flash_redirect("/export", str(exc), "warning")
-    marked_count = len(invoices) if mark_reported else 0
 
-    # 提醒已出现在其它未作废报销单里的发票，避免同一张票重复提交
-    conflicts = open_batch_conflicts([i["id"] for i in invoices])
-    duplicate_batches = sorted({b for batch_ids in conflicts.values() for b in batch_ids
-                                if b != batch_id})
-
-    ctx = get_flash(request)
-    ctx.update({
-        "page": "export",
-        "filters": filters if not selected_ids_str else {},
-        "download_links": download_links,
-        "invoice_count": len(invoices),
-        "total_amount": total_amount,
-        "selected_ids": selected_ids_str,
-        "selected_invoices": invoices if selected_ids_str else [],
-        "required_invoices": [],
-        "required_numbers": "",
-        "required_numbers_set": set(),
-        "marked_count": marked_count,
-        "batch_id": batch_id,
-        "duplicate_invoice_count": len(conflicts),
-        "duplicate_batches": duplicate_batches,
-        "history": list_reimbursements(),
-        "target_amount": "",
-        "max_count": 0,
-        "candidates": None,
-        "match_filters": {},
-    })
-    return templates.TemplateResponse(request, "export.html", ctx)
+    # 用重定向收尾：刷新不会重新导出，双击也不会多生成一张单据
+    message = f"已生成 {len(links)} 个文件"
+    if mark_reported:
+        message += f"，{len(invoices)} 张标记为已报销"
+    return flash_redirect(f"/export?batch={batch_id}", message)
 
 
 @app.get("/export/download/{filename}")

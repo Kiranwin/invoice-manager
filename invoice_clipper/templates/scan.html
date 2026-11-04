@@ -58,14 +58,14 @@
   <div class="section-heading"><div><h3>导入发票</h3><p>支持 PDF、OFD、PNG、JPG 等格式，可一次选择多个文件。</p></div><span class="upload-badge">OCR</span></div>
   <form method="POST" action="/inbox" enctype="multipart/form-data" id="scan-form">
     <div class="upload-box">
-      <input type="file" name="files" multiple accept=".pdf,.ofd,.png,.jpg,.jpeg,.bmp,.tiff" style="font-size: 14px;">
+      <input type="file" name="files" multiple required accept=".pdf,.ofd,.png,.jpg,.jpeg,.bmp,.tiff" style="font-size: 14px;">
     </div>
 
     <!-- 归属信息 -->
     <div class="form-row" style="margin-top: 20px;">
       <div class="form-group">
-        <label>归属项目</label>
-        <select name="belong_project">
+        <label for="belong_project">归属项目</label>
+        <select id="belong_project" name="belong_project">
           <option value="">— 不选择 —</option>
           {% for p in projects %}
           <option value="{{ p.name }}">{{ p.name }}</option>
@@ -73,8 +73,8 @@
         </select>
       </div>
       <div class="form-group">
-        <label>归属人</label>
-        <select name="belong_person">
+        <label for="belong_person">归属人</label>
+        <select id="belong_person" name="belong_person">
           <option value="">— 不选择 —</option>
           {% for p in persons %}
           <option value="{{ p.name }}">{{ p.name }}</option>
@@ -91,27 +91,85 @@
   <!-- 扫描进度提示（初始隐藏） -->
   <div id="scan-progress" class="scan-progress" style="display: none;">
     <div class="spinner"></div>
-    <div class="scan-progress-text">正在处理中，请稍候…</div>
-    <div class="scan-progress-hint">发票识别通常需要 3-15 秒，文件越大耗时越长</div>
+    <div class="scan-progress-text" id="scan-progress-text">正在处理中，请稍候…</div>
+    <div class="scan-progress-track"><div class="scan-progress-bar" id="scan-progress-bar"></div></div>
+    <div class="scan-progress-hint">发票识别通常需要 3-15 秒，文件越大耗时越长；可以关掉页面，已入库的不会重复</div>
+    <div class="scan-progress-list" id="scan-progress-list"></div>
   </div>
 </div>
 
 <script>
-document.getElementById('scan-form').addEventListener('submit', function(e) {
-  const project = this.querySelector('[name="belong_project"]').value;
-  const person = this.querySelector('[name="belong_person"]').value;
-  if (!project && !person) {
-    if (!confirm('您未选择归属项目和归属人，是否继续？')) {
-      e.preventDefault();
-      return;
+(function () {
+  const form = document.getElementById('scan-form');
+  if (!form) return;
+
+  form.addEventListener('submit', function (e) {
+    const input = form.querySelector('input[name="files"]');
+    const files = Array.from(input.files || []);
+    if (files.length === 0) return;  // 交给浏览器原生的必填提示
+
+    e.preventDefault();
+
+    const project = form.querySelector('[name="belong_project"]').value;
+    const person = form.querySelector('[name="belong_person"]').value;
+    if (!project && !person && !confirm('您未选择归属项目和归属人，是否继续？')) return;
+
+    const btn = document.getElementById('scan-btn');
+    const box = document.getElementById('scan-progress');
+    const bar = document.getElementById('scan-progress-bar');
+    const text = document.getElementById('scan-progress-text');
+    const list = document.getElementById('scan-progress-list');
+
+    btn.disabled = true;
+    btn.textContent = '处理中…';
+    box.style.display = 'block';
+    list.innerHTML = '';
+
+    let ok = 0, fail = 0, done = 0;
+
+    function render() {
+      bar.style.width = Math.round((done / files.length) * 100) + '%';
+      text.textContent = done < files.length
+        ? `正在处理 ${done + 1}/${files.length}：${files[done].name}`
+        : `处理完成：成功 ${ok}，失败 ${fail}`;
     }
-  }
-  // 显示进度提示，禁用按钮
-  const btn = document.getElementById('scan-btn');
-  btn.disabled = true;
-  btn.textContent = '处理中…';
-  document.getElementById('scan-progress').style.display = 'block';
-});
+
+    function addRow(name, message, success) {
+      const row = document.createElement('div');
+      row.className = 'scan-progress-item ' + (success ? 'ok' : 'fail');
+      row.textContent = (success ? '✓ ' : '✕ ') + name + (message ? ' · ' + message : '');
+      list.appendChild(row);
+    }
+
+    (async function () {
+      for (const file of files) {
+        render();
+        const payload = new FormData();
+        payload.append('file', file);
+        payload.append('belong_project', project);
+        payload.append('belong_person', person);
+        try {
+          const resp = await fetch('/inbox/api', { method: 'POST', body: payload });
+          if (!resp.ok) throw new Error('HTTP ' + resp.status);
+          const data = await resp.json();
+          if (data.ok) { ok++; addRow(file.name, '', true); }
+          else { fail++; addRow(file.name, data.error || '识别失败', false); }
+        } catch (err) {
+          fail++;
+          addRow(file.name, '请求失败，可稍后重试', false);
+        }
+        done++;
+      }
+      render();
+      // 收尾回到收件箱，用重定向而不是直接渲染，刷新不会重传
+      const message = `本次导入 ${files.length} 个文件：成功 ${ok}，失败 ${fail}`;
+      setTimeout(function () {
+        location.href = '/inbox?message=' + encodeURIComponent(message)
+          + '&msg_type=' + (fail ? 'warning' : 'success');
+      }, fail ? 1200 : 500);
+    })();
+  });
+})();
 </script>
 
 {% if results %}

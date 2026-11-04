@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 
-{% set status_class = {'exported': 'muted', 'reported': 'success', 'rejected': 'danger', 'voided': 'muted'} %}
+{% set status_class = {'exported': 'primary', 'reported': 'success', 'rejected': 'danger', 'voided': 'muted'} %}
 
 <div class="page-header">
   <div><h1>报销记录</h1><p>每次导出都会留下一条报销单。财务退回后在这里移出发票、修正金额、重新生成文件。</p></div>

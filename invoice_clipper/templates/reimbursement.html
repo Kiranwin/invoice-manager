@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 {% block content %}
 
-{% set status_class = {'exported': 'muted', 'reported': 'success', 'rejected': 'danger', 'voided': 'muted'} %}
-{% set inv_status = {'pending': ('待确认', 'warning'), 'ready': ('可报销', 'success'), 'excluded': ('已排除', 'danger'), 'reported': ('已报销', 'muted')} %}
+{% set status_class = {'exported': 'primary', 'reported': 'success', 'rejected': 'danger', 'voided': 'muted'} %}
+{% set inv_status = {'pending': ('待确认', 'warning'), 'ready': ('可报销', 'success'), 'excluded': ('已排除', 'danger'), 'reported': ('已报销', 'primary')} %}
 
 <div class="detail-header">
   <div class="detail-heading">
@@ -74,15 +74,15 @@
       <form method="POST" action="/reimbursements/{{ batch.id }}/rebuild" class="inline-form">
         <div class="form-row">
           <div class="form-group">
-            <label>导出内容</label>
-            <select name="export_mode">
+            <label for="export_mode">导出内容</label>
+            <select id="export_mode" name="export_mode">
               <option value="invoice_only" {{ 'selected' if batch.export_mode != 'with_attachments' }}>仅导出发票</option>
               <option value="with_attachments" {{ 'selected' if batch.export_mode == 'with_attachments' }}>发票 + 附件</option>
             </select>
           </div>
           <div class="form-group">
-            <label>打包方式</label>
-            <select name="package_mode">
+            <label for="package_mode">打包方式</label>
+            <select id="package_mode" name="package_mode">
               <option value="merged_pdf" {{ 'selected' if not batch.package_mode or batch.package_mode == 'merged_pdf' }}>合并 PDF</option>
               <option value="source_zip" {{ 'selected' if batch.package_mode == 'source_zip' }}>源文件打包 (ZIP)</option>
               <option value="both" {{ 'selected' if batch.package_mode == 'both' }}>两者都要</option>
@@ -209,8 +209,8 @@
       {% if batch.status != 'voided' %}
       <form method="POST" action="/reimbursements/{{ batch.id }}/status" class="stack-form">
         <div class="form-group">
-          <label>报销单状态</label>
-          <select name="status">
+          <label for="status">报销单状态</label>
+          <select id="status" name="status">
             <option value="exported" {{ 'selected' if batch.status == 'exported' }} {{ 'disabled' if batch.status == 'reported' }}>已导出</option>
             <option value="reported" {{ 'selected' if batch.status == 'reported' }}>已报销</option>
             <option value="rejected" {{ 'selected' if batch.status == 'rejected' }}>财务退回</option>
@@ -222,8 +222,8 @@
       {% endif %}
       <form method="POST" action="/reimbursements/{{ batch.id }}/note" class="stack-form" style="margin-top: 14px;">
         <div class="form-group">
-          <label>备注</label>
-          <textarea name="note" rows="3" maxlength="500" placeholder="例：财务说住宿票超标准，这两张不予报销">{{ batch.note or '' }}</textarea>
+          <label for="note">备注</label>
+          <textarea id="note" name="note" rows="3" maxlength="500" placeholder="例：财务说住宿票超标准，这两张不予报销">{{ batch.note or '' }}</textarea>
         </div>
         <button type="submit" class="btn btn-outline btn-sm" style="align-self: flex-start;">保存备注</button>
       </form>
@@ -235,8 +235,8 @@
       <form method="POST" action="/reimbursements/{{ batch.id }}/void"
             onsubmit="return confirm('整单退回后，这 {{ items | length }} 张发票会离开报销单，报销单标记为已作废。确定？');">
         <div class="form-group">
-          <label>发票去向</label>
-          <select name="target_state">
+          <label for="target_state">发票去向</label>
+          <select id="target_state" name="target_state">
             <option value="ready">恢复为可报销（可以重新凑票）</option>
             <option value="excluded">标记为已排除（不再参与凑票）</option>
           </select>

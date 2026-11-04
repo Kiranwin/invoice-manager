@@ -10,14 +10,14 @@
   <div class="section-heading"><div><h3>按目标金额凑票</h3><p>系统会从已确认、可报销的发票中生成接近目标金额的组合。</p></div><span class="section-number">01</span></div>
   <form method="POST" action="/export/match">
     <div class="form-row">
-      <div class="form-group"><label>目标金额 (¥)</label><input type="number" step="0.01" min="0.01" name="target_amount" value="{{ target_amount or '' }}" required></div>
-      <div class="form-group"><label>最多张数</label><input type="number" min="0" max="50" name="max_count" value="{{ max_count if max_count and max_count < 9999 else '' }}" placeholder="不限"></div>
-      <div class="form-group"><label>开始日期</label><input type="date" name="date_from" value="{{ match_filters.date_from or '' }}"></div>
-      <div class="form-group"><label>结束日期</label><input type="date" name="date_to" value="{{ match_filters.date_to or '' }}"></div>
+      <div class="form-group"><label for="match_target_amount">目标金额 (¥)</label><input type="number" step="0.01" min="0.01" id="match_target_amount" name="target_amount" value="{{ target_amount or '' }}" required></div>
+      <div class="form-group"><label for="match_max_count">最多张数</label><input type="number" min="0" max="50" id="match_max_count" name="max_count" value="{{ max_count if max_count and max_count < 9999 else '' }}" placeholder="不限"></div>
+      <div class="form-group"><label for="match_date_from">开始日期</label><input type="date" id="match_date_from" name="date_from" value="{{ match_filters.date_from or '' }}"></div>
+      <div class="form-group"><label for="match_date_to">结束日期</label><input type="date" id="match_date_to" name="date_to" value="{{ match_filters.date_to or '' }}"></div>
     </div>
     <div class="form-row">
-      <div class="form-group"><label>归属项目</label><input type="text" name="project" value="{{ match_filters.project or '' }}"></div>
-      <div class="form-group"><label>归属人</label><input type="text" name="person" value="{{ match_filters.person or '' }}"></div>
+      <div class="form-group"><label for="match_project">归属项目</label><input type="text" id="match_project" name="project" value="{{ match_filters.project or '' }}"></div>
+      <div class="form-group"><label for="match_person">归属人</label><input type="text" id="match_person" name="person" value="{{ match_filters.person or '' }}"></div>
       <button type="submit" class="btn btn-primary">生成候选方案</button>
     </div>
     <div class="req-block" id="req-block">
@@ -80,20 +80,20 @@
   </div>
   {% endif %}
 
-  <form method="POST" action="/export">
+  <form method="POST" action="/export" id="export-form">
     {% if selected_ids %}
     <input type="hidden" name="selected_ids" value="{{ selected_ids }}">
     {% endif %}
 
     <div class="form-row">
-      <div class="form-group"><label>开始日期</label><input type="date" name="date_from" value="{{ filters.date_from }}" {{ 'disabled' if selected_ids }}></div>
-      <div class="form-group"><label>结束日期</label><input type="date" name="date_to" value="{{ filters.date_to }}" {{ 'disabled' if selected_ids }}></div>
-      <div class="form-group"><label>销售方</label><input type="text" name="seller" value="{{ filters.seller }}" placeholder="模糊搜索" {{ 'disabled' if selected_ids }}></div>
-      <div class="form-group"><label>购买方</label><input type="text" name="buyer" value="{{ filters.buyer }}" placeholder="模糊搜索" {{ 'disabled' if selected_ids }}></div>
+      <div class="form-group"><label for="date_from">开始日期</label><input type="date" id="date_from" name="date_from" value="{{ filters.date_from }}" {{ 'disabled' if selected_ids }}></div>
+      <div class="form-group"><label for="date_to">结束日期</label><input type="date" id="date_to" name="date_to" value="{{ filters.date_to }}" {{ 'disabled' if selected_ids }}></div>
+      <div class="form-group"><label for="seller">销售方</label><input type="text" id="seller" name="seller" value="{{ filters.seller }}" placeholder="模糊搜索" {{ 'disabled' if selected_ids }}></div>
+      <div class="form-group"><label for="buyer">购买方</label><input type="text" id="buyer" name="buyer" value="{{ filters.buyer }}" placeholder="模糊搜索" {{ 'disabled' if selected_ids }}></div>
     </div>
     <div class="form-row">
-      <div class="form-group"><label>归属项目</label><input type="text" name="project" value="{{ filters.project }}" {{ 'disabled' if selected_ids }}></div>
-      <div class="form-group"><label>归属人</label><input type="text" name="person" value="{{ filters.person }}" {{ 'disabled' if selected_ids }}></div>
+      <div class="form-group"><label for="project">归属项目</label><input type="text" id="project" name="project" value="{{ filters.project }}" {{ 'disabled' if selected_ids }}></div>
+      <div class="form-group"><label for="person">归属人</label><input type="text" id="person" name="person" value="{{ filters.person }}" {{ 'disabled' if selected_ids }}></div>
     </div>
 
     {% if not selected_ids %}
@@ -106,8 +106,8 @@
     <div style="margin-top: 20px; border-top: 1px solid #e5e7eb; padding-top: 16px;">
       <h4 style="font-size: 14px; font-weight: 500; color: #0c0a09; margin-bottom: 8px;">导出内容</h4>
       <div class="export-mode-group">
-        <label><input type="radio" name="export_mode" value="invoice_only" checked> 仅导出发票</label>
-        <label><input type="radio" name="export_mode" value="with_attachments"> 发票 + 附件</label>
+        <label for="exp_mode_invoice_only"><input type="radio" id="exp_mode_invoice_only" name="export_mode" value="invoice_only" checked> 仅导出发票</label>
+        <label for="exp_mode_with_attachments"><input type="radio" id="exp_mode_with_attachments" name="export_mode" value="with_attachments"> 发票 + 附件</label>
       </div>
     </div>
 
@@ -115,9 +115,9 @@
     <div style="margin-top: 12px;">
       <h4 style="font-size: 14px; font-weight: 500; color: #0c0a09; margin-bottom: 8px;">打包方式</h4>
       <div class="export-mode-group">
-        <label><input type="radio" name="package_mode" value="merged_pdf" checked> 合并 PDF</label>
-        <label><input type="radio" name="package_mode" value="source_zip"> 源文件打包 (ZIP)</label>
-        <label><input type="radio" name="package_mode" value="both"> 两者都要</label>
+        <label for="pkg_mode_merged_pdf"><input type="radio" id="pkg_mode_merged_pdf" name="package_mode" value="merged_pdf" checked> 合并 PDF</label>
+        <label for="pkg_mode_source_zip"><input type="radio" id="pkg_mode_source_zip" name="package_mode" value="source_zip"> 源文件打包 (ZIP)</label>
+        <label for="pkg_mode_both"><input type="radio" id="pkg_mode_both" name="package_mode" value="both"> 两者都要</label>
       </div>
       <div class="export-mode-hint">合并 PDF：所有发票（和附件图片）合为一个 PDF 文件</div>
       <div class="export-mode-hint">源文件打包：保留原始 PDF/图片文件，打包为 ZIP</div>
@@ -138,10 +138,25 @@
   </form>
 </div>
 
-{% if download_links %}
+{% if selected_ids and not result_batch %}
+<div class="action-bar">
+  <div class="action-bar-info">
+    已选 <strong>{{ selected_invoices | length }}</strong> 张 ·
+    ¥{{ "%.2f" | format(selected_invoices | sum(attribute='amount_with_tax') or 0) }}
+  </div>
+  <span class="action-bar-hint">导出内容与打包方式在上方选择</span>
+  <button type="submit" form="export-form" class="btn btn-primary">开始导出</button>
+</div>
+<script>document.body.classList.add('has-action-bar');</script>
+{% endif %}
+
+{% if result_batch %}
 <div class="result-card">
   <h3>导出完成</h3>
-  <p>报销单 <a href="/reimbursements/{{ batch_id }}">#{{ batch_id }}</a>：财务退回时在这里移出发票并重新生成。</p>
+  <p>
+    报销单 <a href="/reimbursements/{{ result_batch.id }}">#{{ result_batch.id }}</a> ·
+    <span class="status-pill status-{{ 'success' if result_batch.status == 'reported' else 'primary' }}">{{ result_batch.status_label }}</span>
+  </p>
   {% if invoice_count is not none %}
   <div class="summary">共导出 <strong>{{ invoice_count }}</strong> 张发票，可报销合计 <strong>¥{{ "%.2f" | format(total_amount) }}</strong></div>
   {% endif %}
@@ -159,6 +174,7 @@
     {% for dl in download_links %}
     <a href="/export/download/{{ dl.filename }}" class="btn btn-success">{{ dl.label }}</a>
     {% endfor %}
+    <a href="/reimbursements/{{ result_batch.id }}" class="btn btn-outline">查看 / 修改报销单</a>
   </div>
 </div>
 {% endif %}
@@ -172,7 +188,7 @@
   {% for batch in history[:10] %}
   <div class="summary">
     <a href="/reimbursements/{{ batch.id }}">#{{ batch.id }}</a> · {{ batch.created_at[:16] | replace('T', ' ') }} · ¥{{ "%.2f" | format(batch.total_cents / 100) }}
-    · <span class="status-pill status-{{ 'success' if batch.status == 'reported' else 'danger' if batch.status == 'rejected' else 'muted' }}">{{ batch.status_label }}</span>
+    · <span class="status-pill status-{{ {'exported': 'primary', 'reported': 'success', 'rejected': 'danger', 'voided': 'muted'}.get(batch.status, 'muted') }}">{{ batch.status_label }}</span>
     {% if batch.note %}<span class="muted"> · {{ batch.note }}</span>{% endif %}
     {% for filename in batch.files %}<a href="/export/download/{{ filename }}" style="margin-left: 8px;">{{ filename }}</a>{% endfor %}
   </div>

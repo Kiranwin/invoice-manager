@@ -37,12 +37,12 @@
     <input type="hidden" name="per_page" value="{{ per_page }}">
     <div class="form-row">
       <div class="form-group" style="flex: 1; min-width: 220px;">
-        <label>搜索</label>
-        <input type="text" name="search" placeholder="销售方 / 购买方 / 发票号码 / 项目名称" value="{{ search }}">
+        <label for="search">搜索</label>
+        <input type="text" id="search" name="search" placeholder="销售方 / 购买方 / 发票号码 / 项目名称" value="{{ search }}">
       </div>
       <div class="form-group amount-filter">
-        <label>金额</label>
-        <input type="text" name="amount" placeholder="100、&gt;=100、100-200" value="{{ amount_filter }}">
+        <label for="amount">金额</label>
+        <input type="text" id="amount" name="amount" placeholder="100、&gt;=100、100-200" value="{{ amount_filter }}">
       </div>
       <div class="form-group checkbox">
         <input type="checkbox" name="status" value="待确认" id="st_pending" {{ 'checked' if '待确认' in status_filter else '' }}>
@@ -59,15 +59,15 @@
       <div class="form-group checkbox"><input type="checkbox" name="status" value="已报销" id="st_reported" {{ 'checked' if '已报销' in status_filter else '' }}><label for="st_reported">已报销</label></div>
     </div>
     <div class="form-row">
-      <div class="form-group"><label>开始日期</label><input type="date" name="date_from" value="{{ filters.date_from }}"></div>
-      <div class="form-group"><label>结束日期</label><input type="date" name="date_to" value="{{ filters.date_to }}"></div>
-      <div class="form-group"><label>销售方</label><input type="text" name="seller" value="{{ filters.seller }}"></div>
-      <div class="form-group"><label>购买方</label><input type="text" name="buyer" value="{{ filters.buyer }}"></div>
+      <div class="form-group"><label for="date_from">开始日期</label><input type="date" id="date_from" name="date_from" value="{{ filters.date_from }}"></div>
+      <div class="form-group"><label for="date_to">结束日期</label><input type="date" id="date_to" name="date_to" value="{{ filters.date_to }}"></div>
+      <div class="form-group"><label for="seller">销售方</label><input type="text" id="seller" name="seller" value="{{ filters.seller }}"></div>
+      <div class="form-group"><label for="buyer">购买方</label><input type="text" id="buyer" name="buyer" value="{{ filters.buyer }}"></div>
     </div>
     <div class="form-row">
-      <div class="form-group"><label>归属项目</label><select name="project"><option value="">全部</option>{% for p in projects %}<option value="{{ p.name }}" {{ 'selected' if filters.project == p.name }}>{{ p.name }}</option>{% endfor %}</select></div>
-      <div class="form-group"><label>归属人</label><select name="person"><option value="">全部</option>{% for p in persons %}<option value="{{ p.name }}" {{ 'selected' if filters.person == p.name }}>{{ p.name }}</option>{% endfor %}</select></div>
-      <div class="form-group"><label>标签</label><select name="tag_id"><option value="">全部</option>{% for t in all_tags %}<option value="{{ t.id }}" {{ 'selected' if tag_id == t.id|string }}>{{ t.name }}</option>{% endfor %}</select></div>
+      <div class="form-group"><label for="project">归属项目</label><select id="project" name="project"><option value="">全部</option>{% for p in projects %}<option value="{{ p.name }}" {{ 'selected' if filters.project == p.name }}>{{ p.name }}</option>{% endfor %}</select></div>
+      <div class="form-group"><label for="person">归属人</label><select id="person" name="person"><option value="">全部</option>{% for p in persons %}<option value="{{ p.name }}" {{ 'selected' if filters.person == p.name }}>{{ p.name }}</option>{% endfor %}</select></div>
+      <div class="form-group"><label for="tag_id">标签</label><select id="tag_id" name="tag_id"><option value="">全部</option>{% for t in all_tags %}<option value="{{ t.id }}" {{ 'selected' if tag_id == t.id|string }}>{{ t.name }}</option>{% endfor %}</select></div>
       <button type="submit" class="btn btn-primary">筛选</button>
       {% if search or amount_filter or tag_id or filters.date_from or filters.date_to or filters.seller or filters.buyer or filters.project or filters.person %}
       <a href="/list" class="btn btn-ghost">清空条件</a>
@@ -107,7 +107,7 @@
           <td class="clickable invoice-main-cell" onclick="location.href='/list/{{ inv.id }}'"><strong>{{ inv.commodity_name or '未填写项目' }}</strong><span>{{ inv.category or '未分类' }}</span></td>
           <td class="money clickable amount-cell" onclick="location.href='/list/{{ inv.id }}'"><strong>{{ "¥%.2f" | format(inv.amount_with_tax or 0) }}</strong><span>税额 ¥{{ "%.2f" | format(inv.tax_amount or 0) }}</span></td>
           <td class="clickable invoice-main-cell" onclick="location.href='/list/{{ inv.id }}'"><strong>{{ inv.belong_project or '未分配项目' }}</strong><span>{{ inv.belong_person or '未分配归属人' }}</span></td>
-          <td class="center clickable" onclick="location.href='/list/{{ inv.id }}'"><span class="tag {{ 'tag-danger' if excluded else 'tag-success' if inv.status == 'ready' else '' }}">{{ status_labels.get(inv.status, inv.status) }}</span></td>
+          <td class="center clickable" onclick="location.href='/list/{{ inv.id }}'"><span class="tag {{ {'pending': 'tag-warning', 'ready': 'tag-success', 'excluded': 'tag-danger', 'reported': 'tag-primary'}.get(inv.status, '') }}">{{ status_labels.get(inv.status, inv.status) }}</span></td>
           <td class="tag-cell clickable" onclick="location.href='/list/{{ inv.id }}'">
             {% set inv_tags = invoice_tags.get(inv.id, []) %}
             {% for t in inv_tags[:3] %}
@@ -206,6 +206,7 @@
     const checked = Array.from(getCheckboxes()).filter(cb => cb.checked);
     countSpan.textContent = checked.length;
     toolbar.classList.toggle('visible', checked.length > 0);
+    document.body.classList.toggle('has-batch-toolbar', checked.length > 0);
   }
 
   if (selectAll) {
@@ -253,6 +254,7 @@ function clearSelection() {
     document.getElementById('select-all').checked = false;
   }
   document.getElementById('batch-toolbar').classList.remove('visible');
+  document.body.classList.remove('has-batch-toolbar');
 }
 
 document.addEventListener('change', function(e) {

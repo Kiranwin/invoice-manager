@@ -36,7 +36,16 @@
     <div class="app-main">
       <header class="mobile-topbar">
         <a class="mobile-brand" href="/inbox"><span class="brand-mark">票</span><strong>发票夹子</strong></a>
-        <a href="/settings" class="mobile-settings">⚙</a>
+        <div class="mobile-nav">
+          <button type="button" class="mobile-nav-toggle" id="mobile-nav-toggle" aria-label="打开导航" aria-expanded="false">☰</button>
+          <nav class="mobile-nav-panel" id="mobile-nav-panel">
+            <a href="/inbox" class="{{ 'active' if page == 'inbox' else '' }}">收件箱</a>
+            <a href="/list" class="{{ 'active' if page == 'list' else '' }}">发票库</a>
+            <a href="/export" class="{{ 'active' if page == 'export' else '' }}">报销单</a>
+            <a href="/reimbursements" class="{{ 'active' if page == 'reimbursements' else '' }}">报销记录</a>
+            <a href="/settings" class="{{ 'active' if page == 'settings' else '' }}">设置</a>
+          </nav>
+        </div>
       </header>
       <main class="content">
         {% if message %}
@@ -46,5 +55,31 @@
       </main>
     </div>
   </div>
+  <script>
+  // 提示语来自 URL 参数，用完就从地址栏抹掉，避免刷新重复提示、链接带旧消息
+  (function () {
+    if (!document.querySelector('.flash')) return;
+    const kept = location.search.slice(1).split('&').filter(Boolean)
+      .filter(p => !/^(message|msg_type)=/.test(p));
+    history.replaceState(null, '', location.pathname + (kept.length ? '?' + kept.join('&') : '') + location.hash);
+  })();
+
+  // 移动端导航
+  (function () {
+    const toggle = document.getElementById('mobile-nav-toggle');
+    const panel = document.getElementById('mobile-nav-panel');
+    if (!toggle || !panel) return;
+    toggle.addEventListener('click', function () {
+      const open = panel.classList.toggle('open');
+      toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+    document.addEventListener('click', function (e) {
+      if (!panel.classList.contains('open')) return;
+      if (panel.contains(e.target) || toggle.contains(e.target)) return;
+      panel.classList.remove('open');
+      toggle.setAttribute('aria-expanded', 'false');
+    });
+  })();
+  </script>
 </body>
 </html>

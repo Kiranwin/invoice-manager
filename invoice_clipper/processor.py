@@ -164,6 +164,11 @@ class InvoiceProcessor:
 
     def _recognize(self, file_path: Path) -> Optional[Dict[str, Any]]:
         """执行多级识别引擎，单个引擎抛错不影响后续层级"""
+        if not self.engines:
+            self._error = "没有可用的识别引擎，请在 config.yaml 中启用至少一个 OCR 引擎"
+            logger.error(self._error)
+            return None
+
         errors = []
         for engine in self.engines:
             logger.info(f"尝试第{engine.priority}级引擎: {engine.name}")
