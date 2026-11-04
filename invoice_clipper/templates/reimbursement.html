@@ -1,0 +1,341 @@
+{% extends "base.html" %}
+{% block content %}
+
+{% set status_class = {'exported': 'muted', 'reported': 'success', 'rejected': 'danger', 'voided': 'muted'} %}
+{% set inv_status = {'pending': ('待确认', 'warning'), 'ready': ('可报销', 'success'), 'excluded': ('已排除', 'danger'), 'reported': ('已报销', 'muted')} %}
+
+<div class="detail-header">
+  <div class="detail-heading">
+    <a href="/reimbursements" class="back-link">← 返回报销记录</a>
+    <div class="detail-title-row">
+      <div>
+        <div class="eyebrow">报销单 · #{{ batch.id }}</div>
+        <h1>¥{{ "%.2f" | format(batch.total_cents / 100) }}</h1>
+        <p>
+          {{ batch.item_count }} 张发票 · 生成于 {{ batch.created_at[:16] | replace('T', ' ') }}
+          {% if batch.updated_at and batch.updated_at[:16] != batch.created_at[:16] %}
+          · 最近修改 {{ batch.updated_at[:16] | replace('T', ' ') }}
+          {% endif %}
+        </p>
+      </div>
+      <span class="status-pill status-{{ status_class.get(batch.status, 'muted') }}">{{ batch.status_label }}</span>
+    </div>
+  </div>
+  <div class="btn-group detail-actions">
+    {% if batch.status in ('exported', 'rejected') %}
+    <form method="POST" action="/reimbursements/{{ batch.id }}/status">
+      <input type="hidden" name="status" value="reported">
+      <button type="submit" class="btn btn-success btn-sm">标记为已报销</button>
+    </form>
+    {% endif %}
+    {% if batch.status in ('exported', 'reported') %}
+    <form method="POST" action="/reimbursements/{{ batch.id }}/status">
+      <input type="hidden" name="status" value="rejected">
+      <button type="submit" class="btn btn-outline btn-sm">标记为财务退回</button>
+    </form>
+    {% endif %}
+    <a href="/export" class="btn btn-outline btn-sm">新建报销单</a>
+  </div>
+</div>
+
+{% if batch.status == 'rejected' %}
+<div class="flash warning">
+  <span class="flash-mark">!</span>
+  <span>这张报销单被标记为财务退回。勾选报不了的那几张移出，再点「重新生成文件」提交修正后的版本。</span>
+</div>
+{% endif %}
+{% if batch.status == 'voided' %}
+<div class="flash warning">
+  <span class="flash-mark">!</span>
+  <span>报销单已作废：里面的发票已全部退回，只作为历史记录保留。</span>
+</div>
+{% endif %}
+
+<div class="detail-layout">
+  <div class="detail-primary">
+
+    <section class="card detail-card">
+      <div class="section-heading">
+        <div><h3>报销文件</h3><p>改动发票名单后需要重新生成，旧文件仍保留在导出目录里。</p></div>
+        <span class="page-chip">{{ batch.files | length }} 个文件</span>
+      </div>
+      {% if batch.files %}
+      <div class="btn-group" style="margin-bottom: 14px;">
+        {% for filename in batch.files %}
+        <a href="/export/download/{{ filename }}" class="btn btn-outline btn-sm">{{ filename }}</a>
+        {% endfor %}
+      </div>
+      {% elif batch.output_files %}
+      <p class="muted">原来的导出文件已不在导出目录中，可重新生成一份。</p>
+      {% else %}
+      <p class="muted">这条记录还没有关联文件。</p>
+      {% endif %}
+      {% if batch.status != 'voided' and items %}
+      <form method="POST" action="/reimbursements/{{ batch.id }}/rebuild" class="inline-form">
+        <div class="form-row">
+          <div class="form-group">
+            <label>导出内容</label>
+            <select name="export_mode">
+              <option value="invoice_only" {{ 'selected' if batch.export_mode != 'with_attachments' }}>仅导出发票</option>
+              <option value="with_attachments" {{ 'selected' if batch.export_mode == 'with_attachments' }}>发票 + 附件</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>打包方式</label>
+            <select name="package_mode">
+              <option value="merged_pdf" {{ 'selected' if not batch.package_mode or batch.package_mode == 'merged_pdf' }}>合并 PDF</option>
+              <option value="source_zip" {{ 'selected' if batch.package_mode == 'source_zip' }}>源文件打包 (ZIP)</option>
+              <option value="both" {{ 'selected' if batch.package_mode == 'both' }}>两者都要</option>
+            </select>
+          </div>
+          <button type="submit" class="btn btn-primary">按当前发票重新生成</button>
+        </div>
+      </form>
+      {% endif %}
+    </section>
+
+    <section class="card detail-card" style="padding: 0; overflow: hidden;">
+      <div class="section-heading" style="padding: 24px 24px 0;">
+        <div><h3>发票明细</h3><p>勾选后移出；移出时选择这批票是回到可报销池，还是标记为已排除。</p></div>
+        <span class="page-chip">{{ items | length }} 张 · ¥{{ "%.2f" | format(batch.total_cents / 100) }}</span>
+      </div>
+      {% if items %}
+      <div class="table-wrap" style="box-shadow: none; border-radius: 0;">
+        <table id="item-table">
+          <thead>
+            <tr>
+              <th class="checkbox-cell"><input type="checkbox" id="select-all" title="全选"></th>
+              <th>日期</th>
+              <th>发票信息</th>
+              <th>项目</th>
+              <th>金额</th>
+              <th>状态</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for inv in items %}
+            <tr class="{{ 'excluded' if inv.status == 'excluded' else '' }}">
+              <td class="checkbox-cell"><input type="checkbox" class="row-checkbox" value="{{ inv.id }}"></td>
+              <td class="date-cell">{{ inv.invoice_date or '-' }}</td>
+              <td class="invoice-main-cell">
+                <a href="/list/{{ inv.id }}"><strong>{{ inv.seller_name or '未知销售方' }}</strong></a>
+                <span>{{ inv.invoice_number or '暂无发票号码' }}</span>
+                <small>{{ inv.buyer_name or '未填写购买方' }}</small>
+              </td>
+              <td class="invoice-main-cell"><strong>{{ inv.commodity_name or '未填写项目' }}</strong><span>{{ inv.category or '未分类' }}</span></td>
+              <td class="money amount-cell"><strong>¥{{ "%.2f" | format(inv.amount_with_tax or 0) }}</strong><span>税额 ¥{{ "%.2f" | format(inv.tax_amount or 0) }}</span></td>
+              <td class="center"><span class="status-pill status-{{ inv_status.get(inv.status, ('', 'muted'))[1] }}">{{ inv_status.get(inv.status, (inv.status, 'muted'))[0] }}</span></td>
+              <td class="action-cell">
+                <form method="POST" action="/reimbursements/{{ batch.id }}/remove" class="inline-action">
+                  <input type="hidden" name="ids" value="{{ inv.id }}">
+                  <input type="hidden" name="target_state" value="ready">
+                  <button type="submit" class="btn btn-outline btn-sm" title="移出并恢复为可报销">移出</button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="item-toolbar">
+        <span class="batch-count">已选 <strong id="item-selected">0</strong> 张</span>
+        <form method="POST" action="/reimbursements/{{ batch.id }}/remove" id="remove-form" class="toolbar-inline">
+          <select name="target_state">
+            <option value="ready">移出后：恢复为可报销</option>
+            <option value="excluded">移出后：标记为已排除</option>
+          </select>
+          <button type="submit" class="btn btn-primary btn-sm" onclick="return fillRemoveIds();">移出选中</button>
+        </form>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="clearSelection()">取消选择</button>
+      </div>
+      {% else %}
+      <div class="empty-state" style="padding: 32px 24px;">
+        <p>报销单里没有发票</p>
+        <p style="margin-top: 8px; font-size: 13px;">可以在下面补充已确认的可报销发票。</p>
+      </div>
+      {% endif %}
+    </section>
+
+    {% if batch.status != 'voided' %}
+    <details class="batch-section" {{ 'open' if not items }}>
+      <summary>补充发票（{{ available | length }} 张可报销）</summary>
+      {% if available %}
+      <div class="picker-search">
+        <input type="text" id="picker-search" placeholder="按销售方、发票号码、项目筛选">
+      </div>
+      <form method="POST" action="/reimbursements/{{ batch.id }}/add">
+        <div class="table-wrap" style="box-shadow: none; border: 1px solid var(--line);">
+          <table id="picker-table">
+            <thead>
+              <tr>
+                <th class="checkbox-cell"><input type="checkbox" id="picker-select-all" title="全选"></th>
+                <th>日期</th>
+                <th>发票信息</th>
+                <th>项目</th>
+                <th>金额</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for inv in available %}
+              <tr class="picker-row" data-search="{{ ((inv.seller_name or '') ~ ' ' ~ (inv.invoice_number or '') ~ ' ' ~ (inv.commodity_name or '')) | lower }}">
+                <td class="checkbox-cell"><input type="checkbox" name="ids" value="{{ inv.id }}"></td>
+                <td class="date-cell">{{ inv.invoice_date or '-' }}</td>
+                <td class="invoice-main-cell"><strong>{{ inv.seller_name or '未知销售方' }}</strong><span>{{ inv.invoice_number or '暂无发票号码' }}</span></td>
+                <td class="invoice-main-cell"><strong>{{ inv.commodity_name or '未填写项目' }}</strong><span>{{ inv.category or '未分类' }}</span></td>
+                <td class="money amount-cell"><strong>¥{{ "%.2f" | format(inv.amount_with_tax or 0) }}</strong></td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <div class="item-toolbar">
+          <span class="batch-count">勾选后加入本报销单{% if batch.status == 'reported' %}，并自动标记为已报销{% endif %}</span>
+          <button type="submit" class="btn btn-primary btn-sm">加入选中的发票</button>
+        </div>
+      </form>
+      {% else %}
+      <p class="muted" style="padding: 8px 0;">没有可补充的发票。先去发票库确认几张，或把已报销的发票退回。</p>
+      {% endif %}
+    </details>
+    {% endif %}
+
+  </div>
+
+  <aside class="detail-secondary">
+
+    <section class="card detail-card">
+      <div class="section-heading"><div><h3>状态与备注</h3><p>记录财务的反馈，下次打开就知道卡在哪。</p></div></div>
+      {% if batch.status != 'voided' %}
+      <form method="POST" action="/reimbursements/{{ batch.id }}/status" class="stack-form">
+        <div class="form-group">
+          <label>报销单状态</label>
+          <select name="status">
+            <option value="exported" {{ 'selected' if batch.status == 'exported' }} {{ 'disabled' if batch.status == 'reported' }}>已导出</option>
+            <option value="reported" {{ 'selected' if batch.status == 'reported' }}>已报销</option>
+            <option value="rejected" {{ 'selected' if batch.status == 'rejected' }}>财务退回</option>
+          </select>
+        </div>
+        <p class="field-hint">标记为「已报销」时，成员发票会一起置为已报销。</p>
+        <button type="submit" class="btn btn-outline btn-sm" style="align-self: flex-start;">保存状态</button>
+      </form>
+      {% endif %}
+      <form method="POST" action="/reimbursements/{{ batch.id }}/note" class="stack-form" style="margin-top: 14px;">
+        <div class="form-group">
+          <label>备注</label>
+          <textarea name="note" rows="3" maxlength="500" placeholder="例：财务说住宿票超标准，这两张不予报销">{{ batch.note or '' }}</textarea>
+        </div>
+        <button type="submit" class="btn btn-outline btn-sm" style="align-self: flex-start;">保存备注</button>
+      </form>
+    </section>
+
+    {% if batch.status != 'voided' and items %}
+    <section class="card detail-card">
+      <div class="section-heading"><div><h3>整单退回</h3><p>整份报销单都不作数时用这个，成员发票会全部放回。</p></div></div>
+      <form method="POST" action="/reimbursements/{{ batch.id }}/void"
+            onsubmit="return confirm('整单退回后，这 {{ items | length }} 张发票会离开报销单，报销单标记为已作废。确定？');">
+        <div class="form-group">
+          <label>发票去向</label>
+          <select name="target_state">
+            <option value="ready">恢复为可报销（可以重新凑票）</option>
+            <option value="excluded">标记为已排除（不再参与凑票）</option>
+          </select>
+        </div>
+        <button type="submit" class="btn btn-danger btn-sm" style="margin-top: 10px;">整单退回</button>
+      </form>
+    </section>
+    {% endif %}
+
+    <section class="card detail-card">
+      <div class="section-heading"><div><h3>处理记录</h3><p>{{ events | length }} 条</p></div></div>
+      {% if events %}
+      <div class="timeline">
+        {% for ev in events %}
+        <div class="timeline-item">
+          <span class="timeline-dot"></span>
+          <div>
+            <div class="timeline-time">{{ ev.created_at[:16] | replace('T', ' ') }}</div>
+            <div class="timeline-text">{{ ev.detail or ev.action }}</div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="muted">暂无记录</p>
+      {% endif %}
+    </section>
+
+  </aside>
+</div>
+
+<script>
+(function() {
+  const table = document.getElementById('item-table');
+  const counter = document.getElementById('item-selected');
+  const selectAll = document.getElementById('select-all');
+
+  function boxes() {
+    return table ? Array.from(table.querySelectorAll('.row-checkbox')) : [];
+  }
+
+  function update() {
+    const checked = boxes().filter(cb => cb.checked).length;
+    if (counter) counter.textContent = checked;
+  }
+
+  if (selectAll) {
+    selectAll.addEventListener('change', function() {
+      boxes().forEach(cb => { cb.checked = selectAll.checked; });
+      update();
+    });
+  }
+  boxes().forEach(cb => cb.addEventListener('change', update));
+
+  window.fillRemoveIds = function() {
+    const ids = boxes().filter(cb => cb.checked).map(cb => cb.value);
+    if (ids.length === 0) {
+      alert('先勾选要移出的发票');
+      return false;
+    }
+    const form = document.getElementById('remove-form');
+    form.querySelectorAll('input[name="ids"]').forEach(el => el.remove());
+    ids.forEach(id => {
+      const input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = 'ids';
+      input.value = id;
+      form.appendChild(input);
+    });
+    return true;
+  };
+
+  window.clearSelection = function() {
+    boxes().forEach(cb => { cb.checked = false; });
+    if (selectAll) selectAll.checked = false;
+    update();
+  };
+
+  // 补充发票区的搜索与全选
+  const pickerSearch = document.getElementById('picker-search');
+  const pickerAll = document.getElementById('picker-select-all');
+  if (pickerSearch) {
+    pickerSearch.addEventListener('input', function() {
+      const keyword = this.value.trim().toLowerCase();
+      document.querySelectorAll('#picker-table .picker-row').forEach(row => {
+        row.style.display = !keyword || (row.dataset.search || '').includes(keyword) ? '' : 'none';
+      });
+    });
+  }
+  if (pickerAll) {
+    pickerAll.addEventListener('change', function() {
+      document.querySelectorAll('#picker-table .picker-row').forEach(row => {
+        if (row.style.display === 'none') return;
+        const cb = row.querySelector('input[name="ids"]');
+        if (cb) cb.checked = pickerAll.checked;
+      });
+    });
+  }
+})();
+</script>
+
+{% endblock %}

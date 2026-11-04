@@ -1,5 +1,5 @@
 """
-发票夹子核心模块 - v3.4.1
+发票夹子核心模块 - v3.5.0
 提供发票处理、数据库操作、导出功能的统一入口
 """
 import os
@@ -41,7 +41,7 @@ from .database import (
     get_all_invoice_tags,
 )
 from .db_backends import DatabaseBackend, SQLiteBackend, PostgreSQLBackend
-from .exporter import export_excel, export_merged_pdf, build_export_label, export_zip_sources
+from .exporter import export_excel, export_merged_pdf, build_export_label, export_zip_sources, export_bundle
 from .matcher import find_best_match, find_multiple_candidates
 from .file_utils import (
     ofd_to_pdf, extract_text_from_pdf,
@@ -221,7 +221,7 @@ __all__ = [
     "get_invoice_tags", "set_invoice_tags",
     "get_invoices_by_ids", "search_invoices_by_tags", "get_all_invoice_tags",
     # 导出
-    "export_excel", "export_merged_pdf", "build_export_label", "export_zip_sources",
+    "export_excel", "export_merged_pdf", "build_export_label", "export_zip_sources", "export_bundle",
     # 凑票
     "find_best_match", "find_multiple_candidates",
     # 文件工具

@@ -2,7 +2,7 @@
   <img src="https://img.shields.io/badge/Python-3.12+-blue.svg" alt="Python 3.12+">
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License">
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg" alt="Platform">
-  <img src="https://img.shields.io/badge/Version-3.4.1-brightgreen.svg" alt="v3.4.1">
+  <img src="https://img.shields.io/badge/Version-3.5.0-brightgreen.svg" alt="v3.5.0">
 </p>
 
 <h1 align="center">发票夹子 🧾</h1>
@@ -26,6 +26,7 @@
 | 🏷️ **标签系统** | 自定义彩色标签，快速分类和筛选发票 |
 | 🎯 **智能凑票** | 给定目标金额，自动找出最优发票组合 |
 | 📊 **灵活导出** | 选择指定发票，合并PDF/源文件ZIP/附件打包 |
+| ↩️ **报销单可修正** | 财务退回后移出发票、重算金额、重新生成文件，已报销发票可退回 |
 | 🗄️ **双数据库** | SQLite（默认）或 PostgreSQL，配置即切 |
 
 ---
@@ -36,7 +37,7 @@
 
 ```bash
 # 从 Wheel 包安装
-pip install dist/invoice_manager-3.4.1-py3-none-any.whl
+pip install dist/invoice_manager-3.5.0-py3-none-any.whl
 ```
 
 ### 启动 Web UI
@@ -169,7 +170,7 @@ MCP Server 暴露以下工具，覆盖发票管理全流程：
 ### Wheel 包（推荐）
 
 ```bash
-pip install dist/invoice_manager-3.4.1-py3-none-any.whl
+pip install dist/invoice_manager-3.5.0-py3-none-any.whl
 ```
 
 安装后可用命令：
@@ -236,6 +237,8 @@ ocr:
 | 📋 发票库 | `/list` | 搜索、状态与标签筛选、编辑及批量操作 |
 | ✏️ 编辑详情 | `/list/{id}` | 全字段编辑 + 附件管理 + 标签选择 |
 | 📊 报销单 | `/export` | 凑票、选票、导出与历史文件下载 |
+| 🗂️ 报销记录 | `/reimbursements` | 报销单列表，按状态筛选 |
+| ↩️ 报销单详情 | `/reimbursements/{id}` | 移出/补充发票、改状态与备注、重新生成文件、处理记录 |
 | ⚙️ 设置 | `/settings` | 管理归属项目、归属人和标签 |
 
 ---
@@ -249,7 +252,7 @@ invoice-manager/
 │   ├── __init__.py               # load_config + 所有模块导出
 │   ├── __main__.py               # pip 入口点
 │   ├── __run__.py                # 进程锁启动入口（支持 --debug）
-│   ├── web.py                    # FastAPI Web UI (v3.4.1)
+│   ├── web.py                    # FastAPI Web UI (v3.5.0)
 │   ├── mcp_server.py             # MCP AI Agent 接口
 │   ├── database.py               # 数据库调度层
 │   ├── db_backends.py            # SQLite + PostgreSQL 后端
@@ -267,6 +270,8 @@ invoice-manager/
 │   │   ├── list.html             # 发票库
 │   │   ├── edit.html             # 编辑 + 附件 + 标签
 │   │   ├── export.html           # 凑票、导出与历史记录
+│   │   ├── reimbursements.html   # 报销记录列表
+│   │   ├── reimbursement.html    # 报销单详情与修正
 │   │   └── settings.html         # 归属与标签设置
 │   └── engines/                  # 识别引擎
 │       ├── base.py               # 抽象基类
@@ -275,7 +280,7 @@ invoice-manager/
 │       ├── baidu_ocr.py          # 百度 OCR
 │       └── llm_vision.py         # 大模型视觉
 └── dist/
-    └── invoice_manager-3.4.1-py3-none-any.whl
+    └── invoice_manager-3.5.0-py3-none-any.whl
 ```
 
 ---
@@ -298,6 +303,19 @@ invoice-manager/
 - `easyofd` → OFD 电子发票格式支持
 - `psycopg2-binary` → PostgreSQL 支持
 - `paddlepaddle` + `paddleocr` → 本地离线 OCR
+
+---
+
+## 🎯 v3.5.0 新增功能
+
+| 功能 | 说明 |
+|------|------|
+| ↩️ **报销单可修正** | 新增报销记录页：财务退回后勾选报不了的发票移出报销单，合计金额自动重算 |
+| 🔓 **已报销发票可退回** | 「已报销」不再是单行道：从报销单移出时可选择恢复为可报销或标记为已排除，切换在事务内完成 |
+| ➕ **补充发票** | 已提交的报销单可以直接补入新的可报销发票，批次为「已报销」时新票自动同步状态 |
+| 🔄 **重新生成文件** | 明细变动后一键按当前发票名单重新导出 Excel / 合并 PDF / 源文件 ZIP，沿用原导出模式 |
+| 🗒️ **备注与处理记录** | 报销单可记备注（如财务反馈），每次移出、补充、改状态、重新生成都留下时间线 |
+| 🧹 **导出健壮性** | 修复未归档发票被当成目录打包进 ZIP、空压缩包残留、`mark_reported=0` 仍被当成勾选的问题 |
 
 ---
 

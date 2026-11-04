@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block content %}
+
+{% set status_class = {'exported': 'muted', 'reported': 'success', 'rejected': 'danger', 'voided': 'muted'} %}
+
+<div class="page-header">
+  <div><h1>报销记录</h1><p>每次导出都会留下一条报销单。财务退回后在这里移出发票、修正金额、重新生成文件。</p></div>
+  <div class="btn-group"><a href="/export" class="btn btn-primary btn-sm">新建报销单</a></div>
+</div>
+
+<div class="filter-tabs">
+  <a href="/reimbursements" class="{{ 'active' if not status_filter else '' }}">全部 <em>{{ total_count }}</em></a>
+  <a href="/reimbursements?status=reported" class="{{ 'active' if status_filter == 'reported' else '' }}">已报销 <em>{{ counts.reported }}</em></a>
+  <a href="/reimbursements?status=rejected" class="{{ 'active' if status_filter == 'rejected' else '' }}">财务退回 <em>{{ counts.rejected }}</em></a>
+  <a href="/reimbursements?status=exported" class="{{ 'active' if status_filter == 'exported' else '' }}">已导出 <em>{{ counts.exported }}</em></a>
+  <a href="/reimbursements?status=voided" class="{{ 'active' if status_filter == 'voided' else '' }}">已作废 <em>{{ counts.voided }}</em></a>
+</div>
+
+{% if batches %}
+<div class="card" style="padding: 0; overflow: hidden;">
+  <div class="table-wrap">
+    <table class="batch-table">
+      <thead>
+        <tr>
+          <th>报销单</th>
+          <th>生成时间</th>
+          <th>状态</th>
+          <th>张数</th>
+          <th>金额</th>
+          <th>备注</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for batch in batches %}
+        <tr class="clickable" onclick="location.href='/reimbursements/{{ batch.id }}'">
+          <td><strong>#{{ batch.id }}</strong></td>
+          <td>{{ batch.created_at[:16] | replace('T', ' ') }}</td>
+          <td><span class="status-pill status-{{ status_class.get(batch.status, 'muted') }}">{{ batch.status_label }}</span></td>
+          <td>{{ batch.item_count }} 张</td>
+          <td class="money"><strong>¥{{ "%.2f" | format(batch.total_cents / 100) }}</strong></td>
+          <td class="note-cell">{{ batch.note or '—' }}</td>
+          <td><a href="/reimbursements/{{ batch.id }}" class="btn btn-outline btn-sm">查看 / 修改</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="card">
+  <div class="empty-state">
+    <p>还没有报销记录</p>
+    <p style="margin-top: 8px; font-size: 13px;">去 <a href="/export" style="color: #3ba6f1;">报销单</a> 生成第一份</p>
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}

@@ -3,7 +3,7 @@
 
 <div class="page-header">
   <div><h1>报销单</h1><p>先选票或凑票，再生成可追溯的报销文件。</p></div>
-  <div class="btn-group"><span class="page-chip">可报销票据工作区</span><a href="/list?status=正常" class="btn btn-outline btn-sm">从发票库选票</a></div>
+  <div class="btn-group"><span class="page-chip">可报销票据工作区</span><a href="/list?status=正常" class="btn btn-outline btn-sm">从发票库选票</a><a href="/reimbursements" class="btn btn-outline btn-sm">报销记录</a></div>
 </div>
 
 <div class="card" id="match">
@@ -141,7 +141,7 @@
 {% if download_links %}
 <div class="result-card">
   <h3>导出完成</h3>
-  <p>报销单 #{{ batch_id }}</p>
+  <p>报销单 <a href="/reimbursements/{{ batch_id }}">#{{ batch_id }}</a>：财务退回时在这里移出发票并重新生成。</p>
   {% if invoice_count is not none %}
   <div class="summary">共导出 <strong>{{ invoice_count }}</strong> 张发票，可报销合计 <strong>¥{{ "%.2f" | format(total_amount) }}</strong></div>
   {% endif %}
@@ -158,10 +158,15 @@
 
 {% if history %}
 <div class="card">
-  <h3>最近报销单</h3>
+  <div class="section-heading">
+    <div><h3>最近报销单</h3><p>需要修正时进入单据详情：移出发票、重算金额、重新生成文件。</p></div>
+    <a href="/reimbursements" class="btn btn-outline btn-sm">全部记录</a>
+  </div>
   {% for batch in history[:10] %}
   <div class="summary">
-    #{{ batch.id }} · {{ batch.created_at[:16] }} · ¥{{ "%.2f" | format(batch.total_cents / 100) }} · {{ '已报销' if batch.status == 'reported' else '已导出' }}
+    <a href="/reimbursements/{{ batch.id }}">#{{ batch.id }}</a> · {{ batch.created_at[:16] | replace('T', ' ') }} · ¥{{ "%.2f" | format(batch.total_cents / 100) }}
+    · <span class="status-pill status-{{ 'success' if batch.status == 'reported' else 'danger' if batch.status == 'rejected' else 'muted' }}">{{ batch.status_label }}</span>
+    {% if batch.note %}<span class="muted"> · {{ batch.note }}</span>{% endif %}
     {% for filename in batch.files %}<a href="/export/download/{{ filename }}" style="margin-left: 8px;">{{ filename }}</a>{% endfor %}
   </div>
   {% endfor %}

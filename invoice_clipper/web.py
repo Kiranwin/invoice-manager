@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""发票夹子 Web UI — FastAPI + Jinja2 (v3.4.1)"""
+"""发票夹子 Web UI — FastAPI + Jinja2 (v3.5.0)"""
 import re
 import json
 import shutil
@@ -7,7 +7,6 @@ import sys
 import os
 import webbrowser
 import tempfile
-import zipfile
 from decimal import InvalidOperation
 from pathlib import Path
 from datetime import datetime
@@ -25,8 +24,7 @@ from invoice_clipper import (
     get_persons, add_person, delete_person,
     get_tags, add_tag, delete_tag, get_invoice_tags, set_invoice_tags,
     get_all_invoice_tags, get_invoices_by_ids, search_invoices_by_tags,
-    InvoiceProcessor, export_excel, export_merged_pdf, build_export_label,
-    export_zip_sources,
+    InvoiceProcessor, build_export_label, export_bundle,
     build_attachment_path, next_attachment_seq,
 )
 from contextlib import asynccontextmanager
@@ -36,6 +34,11 @@ from invoice_clipper.workflow import (
     change_invoice_state, delete_invoice_with_files, reimbursable_invoices,
     record_reimbursement, list_reimbursements, amount_cents,
     record_import_failure, list_import_failures, retry_import_failure,
+    BATCH_STATUS_LABELS,
+    get_reimbursement, remove_invoices_from_reimbursement,
+    add_invoices_to_reimbursement, set_reimbursement_status,
+    update_reimbursement_note, void_reimbursement,
+    attach_reimbursement_files, batch_for_invoice,
 )
 
 # 包内资源路径（安装后模板/静态文件在包目录内）
@@ -56,7 +59,7 @@ async def _lifespan(app: FastAPI):
         yield  # 应用运行中
 
 
-app = FastAPI(title="发票夹子", version="3.4.1", lifespan=_lifespan)
+app = FastAPI(title="发票夹子", version="3.5.0", lifespan=_lifespan)
 app.mount("/static", StaticFiles(directory=str(PKG_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(PKG_DIR / "templates"))
 
@@ -455,6 +458,7 @@ def get_edit(request: Request, inv_id: int):
         "persons": persons,
         "all_tags": get_tags(),
         "invoice_tags": get_invoice_tags(inv_id),
+        "reimbursement_batch": batch_for_invoice(inv_id),
         "raw_json": json.dumps(dict(inv), ensure_ascii=False, indent=2, default=str),
     })
     return templates.TemplateResponse(request, "edit.html", ctx)
@@ -578,28 +582,22 @@ def delete_attachment_route(request: Request, inv_id: int, att_id: int):
     return flash_redirect(f"/list/{inv_id}", "附件已删除")
 
 
-# ── Attachment ZIP export helper ────────────────
-
-
-def _export_attachments_zip(invoices: list, zip_path: Path, cfg: dict):
-    """Build a ZIP of all attachments organized by invoice number"""
-    with zipfile.ZipFile(str(zip_path), "w", zipfile.ZIP_DEFLATED) as zf:
-        for inv in invoices:
-            inv_id = inv["id"]
-            inv_no = (inv.get("invoice_number") or f"INV-{inv_id}").replace("/", "_")
-            seller = (inv.get("seller_name") or "unknown")[:20]
-            folder = f"{inv_no}_{seller}/"
-            atts = get_attachments(inv_id)
-            for att in atts:
-                fp = Path(att["stored_path"])
-                if fp.exists():
-                    arcname = folder + (att.get("original_name") or fp.name)
-                    zf.write(str(fp), arcname)
+# ── 导出辅助 ──────────────────────────────────
 
 
 def _export_dir(cfg: dict) -> Path:
     configured = cfg.get("storage", {}).get("export_dir")
     return Path(configured).expanduser() if configured else Path.home() / "Documents" / "发票夹子" / "exports"
+
+
+def build_export_files(cfg: dict, invoices: list, label: str,
+                       export_mode: str, package_mode: str) -> list[dict]:
+    """生成一套导出文件。首次导出与报销单重新生成共用这条路径。"""
+    attachments_map = None
+    if export_mode == "with_attachments":
+        attachments_map = {inv["id"]: get_attachments(inv["id"]) for inv in invoices}
+    return export_bundle(invoices, _export_dir(cfg), label, export_mode,
+                         package_mode, attachments_map)
 
 
 @app.get("/export")
@@ -688,57 +686,25 @@ async def post_export(request: Request):
     export_mode = form.get("export_mode", "invoice_only")  # invoice_only | with_attachments
     package_mode = form.get("package_mode", "merged_pdf")  # merged_pdf | source_zip | both
 
-    export_dir = _export_dir(cfg)
-    export_dir.mkdir(parents=True, exist_ok=True)
     label = build_export_label(form) if not selected_ids_str else f"选中{len(invoices)}张"
     label = f"{label}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
-    download_links = []
 
     try:
-        # Excel 始终导出
-        excel_path = export_dir / f"报销明细_{label}.xlsx"
-        export_excel(invoices, excel_path)
-        download_links.append({"label": "下载 Excel", "filename": excel_path.name})
-
-        include_attachments = export_mode == "with_attachments"
-
-        # Merged PDF
-        if package_mode in ("merged_pdf", "both"):
-            att_map = None
-            if include_attachments:
-                att_map = {}
-                for inv in invoices:
-                    att_map[inv["id"]] = get_attachments(inv["id"])
-            pdf_path = export_dir / f"报销发票_{label}.pdf"
-            result = export_merged_pdf(invoices, pdf_path, attachments_map=att_map)
-            if result:
-                download_links.append({"label": "下载合并 PDF", "filename": pdf_path.name})
-
-        # Source ZIP
-        if package_mode in ("source_zip", "both"):
-            zip_path = export_dir / f"源文件_{label}.zip"
-            result = export_zip_sources(invoices, zip_path, include_attachments=include_attachments)
-            if result:
-                download_links.append({"label": "下载源文件 ZIP", "filename": zip_path.name})
-
-        # Legacy: attachment-only ZIP (only when mode is with_attachments and package is merged_pdf or both)
-        if include_attachments and package_mode == "merged_pdf":
-            zip_path = export_dir / f"发票附件_{label}.zip"
-            _export_attachments_zip(invoices, zip_path, cfg)
-            if zip_path.exists():
-                download_links.append({"label": "下载附件 ZIP", "filename": zip_path.name})
-
+        links = build_export_files(cfg, invoices, label, export_mode, package_mode)
     except Exception as e:
         return flash_redirect("/export", f"导出失败: {e}", "error")
+    download_links = [{"label": link["label"], "filename": link["filename"]} for link in links]
 
+    mark_reported = _truthy(form.get("mark_reported"))
     try:
         batch_id = record_reimbursement(
-            invoices, [export_dir / link["filename"] for link in download_links],
-            mark_reported=bool(form.get("mark_reported")),
+            invoices, [link["path"] for link in links],
+            mark_reported=mark_reported,
+            export_mode=export_mode, package_mode=package_mode,
         )
     except ValueError as exc:
         return flash_redirect("/export", str(exc), "warning")
-    marked_count = len(invoices) if form.get("mark_reported") else 0
+    marked_count = len(invoices) if mark_reported else 0
 
     ctx = get_flash(request)
     ctx.update({
@@ -774,6 +740,153 @@ def download_export(request: Request, filename: str):
     if not filepath.exists():
         raise HTTPException(404)
     return FileResponse(filepath, filename=filename)
+
+
+# ── 报销单记录与修改 ─────────────────────────────
+
+
+def _int_values(values) -> list[int]:
+    return [int(v) for v in values if str(v).strip().isdigit()]
+
+
+def _truthy(value) -> bool:
+    """表单里未勾选的复选框不会提交；提交了也可能带任意值，所以按关键字判断。"""
+    return str(value if value is not None else "").strip().lower() in {"1", "on", "true", "yes"}
+
+
+@app.get("/reimbursements")
+def get_reimbursements(request: Request, status: str = ""):
+    ctx = get_flash(request)
+    batches = list_reimbursements()
+    counts = {key: sum(1 for b in batches if b["status"] == key) for key in BATCH_STATUS_LABELS}
+    if status in BATCH_STATUS_LABELS:
+        batches = [b for b in batches if b["status"] == status]
+    ctx.update({
+        "page": "reimbursements",
+        "batches": batches,
+        "status_filter": status,
+        "counts": counts,
+        "total_count": sum(counts.values()),
+    })
+    return templates.TemplateResponse(request, "reimbursements.html", ctx)
+
+
+@app.get("/reimbursements/{batch_id}")
+def get_reimbursement_detail(request: Request, batch_id: int):
+    batch = get_reimbursement(batch_id)
+    if not batch:
+        raise HTTPException(404, "报销单不存在")
+    member_ids = {item["id"] for item in batch["items"]}
+    available = [i for i in reimbursable_invoices() if i["id"] not in member_ids]
+    available.sort(key=lambda i: i.get("invoice_date") or "", reverse=True)
+    ctx = get_flash(request)
+    ctx.update({
+        "page": "reimbursements",
+        "batch": batch,
+        "items": batch["items"],
+        "events": batch["events"],
+        "available": available,
+    })
+    return templates.TemplateResponse(request, "reimbursement.html", ctx)
+
+
+@app.post("/reimbursements/{batch_id}/remove")
+async def post_remove_reimbursement_items(request: Request, batch_id: int):
+    form = await request.form()
+    ids = _int_values(form.getlist("ids"))
+    target_state = form.get("target_state", "ready")
+    if target_state not in ("ready", "excluded"):
+        target_state = "ready"
+    if not ids:
+        return flash_redirect(f"/reimbursements/{batch_id}", "请先勾选要移出的发票", "warning")
+    try:
+        result = remove_invoices_from_reimbursement(batch_id, ids, target_state)
+    except ValueError as exc:
+        return flash_redirect(f"/reimbursements/{batch_id}", str(exc), "warning")
+    target_label = "恢复为可报销" if target_state == "ready" else "标记为已排除"
+    message = f"已移出 {result['removed']} 张发票，{target_label}"
+    if result["status"] == "voided":
+        message += "；报销单已无发票，状态改为已作废"
+    return flash_redirect(f"/reimbursements/{batch_id}", message)
+
+
+@app.post("/reimbursements/{batch_id}/add")
+async def post_add_reimbursement_items(request: Request, batch_id: int):
+    form = await request.form()
+    ids = _int_values(form.getlist("ids"))
+    if not ids:
+        return flash_redirect(f"/reimbursements/{batch_id}", "请先勾选要补充的发票", "warning")
+    try:
+        result = add_invoices_to_reimbursement(batch_id, ids, _truthy(form.get("mark_reported")))
+    except ValueError as exc:
+        return flash_redirect(f"/reimbursements/{batch_id}", str(exc), "warning")
+    message = f"已补充 {result['added']} 张发票，合计 ¥{result['total_cents'] / 100:.2f}"
+    if result["marked_reported"]:
+        message += "；新发票已标记为已报销"
+    return flash_redirect(f"/reimbursements/{batch_id}", message)
+
+
+@app.post("/reimbursements/{batch_id}/status")
+async def post_reimbursement_status(request: Request, batch_id: int):
+    form = await request.form()
+    status = form.get("status", "")
+    try:
+        result = set_reimbursement_status(batch_id, status)
+    except ValueError as exc:
+        return flash_redirect(f"/reimbursements/{batch_id}", str(exc), "warning")
+    message = f"报销单状态已改为{BATCH_STATUS_LABELS.get(status, status)}"
+    if result["marked"]:
+        message += f"，{result['marked']} 张发票标记为已报销"
+    return flash_redirect(f"/reimbursements/{batch_id}", message)
+
+
+@app.post("/reimbursements/{batch_id}/note")
+async def post_reimbursement_note(request: Request, batch_id: int):
+    form = await request.form()
+    try:
+        update_reimbursement_note(batch_id, form.get("note", ""))
+    except ValueError as exc:
+        return flash_redirect(f"/reimbursements/{batch_id}", str(exc), "warning")
+    return flash_redirect(f"/reimbursements/{batch_id}", "备注已保存")
+
+
+@app.post("/reimbursements/{batch_id}/void")
+async def post_void_reimbursement(request: Request, batch_id: int):
+    form = await request.form()
+    target_state = form.get("target_state", "ready")
+    if target_state not in ("ready", "excluded"):
+        target_state = "ready"
+    try:
+        result = void_reimbursement(batch_id, target_state)
+    except ValueError as exc:
+        return flash_redirect(f"/reimbursements/{batch_id}", str(exc), "warning")
+    target_label = "恢复为可报销" if target_state == "ready" else "标记为已排除"
+    return flash_redirect(
+        f"/reimbursements/{batch_id}",
+        f"整单退回完成：{result['removed']} 张发票{target_label}，报销单已作废")
+
+
+@app.post("/reimbursements/{batch_id}/rebuild")
+async def post_rebuild_reimbursement(request: Request, batch_id: int):
+    cfg = request.app.state.config
+    form = await request.form()
+    batch = get_reimbursement(batch_id)
+    if not batch:
+        raise HTTPException(404, "报销单不存在")
+    if not batch["items"]:
+        return flash_redirect(f"/reimbursements/{batch_id}", "报销单里没有发票", "warning")
+    export_mode = form.get("export_mode") or batch.get("export_mode") or "invoice_only"
+    package_mode = form.get("package_mode") or batch.get("package_mode") or "merged_pdf"
+    label = f"单据{batch_id}_修正_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+    try:
+        links = build_export_files(cfg, batch["items"], label, export_mode, package_mode)
+    except Exception as exc:
+        return flash_redirect(f"/reimbursements/{batch_id}", f"重新生成失败: {exc}", "error")
+    attach_reimbursement_files(batch_id, [link["path"] for link in links],
+                               export_mode, package_mode)
+    return flash_redirect(
+        f"/reimbursements/{batch_id}",
+        f"已按 {len(batch['items'])} 张发票重新生成 {len(links)} 个文件")
 
 
 # ── 智能凑票 ────────────────────────────────────────
@@ -878,7 +991,7 @@ def main():
     port = int(cfg.get("server", {}).get("port", 8000))
 
     url = f"http://{host}:{port}"
-    print(f"发票夹子 v3.4.1 正在启动 ...")
+    print(f"发票夹子 v3.5.0 正在启动 ...")
     print(f"   配置文件: {cfg_path}")
     print(f"   本地地址: {url}")
 

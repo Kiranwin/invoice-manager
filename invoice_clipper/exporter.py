@@ -175,8 +175,12 @@ def export_merged_pdf(invoices: List[dict], output_path: Path,
     merged = fitz.open()
     count = 0
     for inv in sorted(invoices, key=lambda x: x.get("invoice_date") or ""):
-        src = Path(inv.get("stored_path") or "")
-        if not src.exists():
+        stored = inv.get("stored_path")
+        if not stored:
+            logger.warning(f"发票 #{inv.get('id')} 未归档文件，跳过")
+            continue
+        src = Path(stored)
+        if not src.is_file():
             logger.warning(f"文件不存在，跳过: {src}")
             continue
 
@@ -249,8 +253,11 @@ def export_zip_sources(invoices: List[dict], output_path: Path,
 
     with zipfile.ZipFile(str(output_path), "w", zipfile.ZIP_DEFLATED) as zf:
         for inv in invoices:
-            src = Path(inv.get("stored_path") or "")
-            if not src.exists():
+            stored = inv.get("stored_path")
+            if not stored:
+                continue
+            src = Path(stored)
+            if not src.is_file():
                 continue
             inv_no = (inv.get("invoice_number") or f"INV-{inv['id']}").replace("/", "_")
             seller = (inv.get("seller_name") or "unknown")[:20]
@@ -272,7 +279,79 @@ def export_zip_sources(invoices: List[dict], output_path: Path,
 
     if count == 0:
         logger.warning("没有可打包的源文件")
+        output_path.unlink(missing_ok=True)
         return None
 
     logger.info(f"ZIP 源文件打包完成: {output_path}，共 {count} 张发票")
     return output_path
+
+
+def _zip_attachments(invoices: List[dict], output_path: Path,
+                     attachments_map: Optional[dict] = None) -> Optional[Path]:
+    """按发票归档附件为 ZIP。"""
+    import zipfile
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    count = 0
+    with zipfile.ZipFile(str(output_path), "w", zipfile.ZIP_DEFLATED) as zf:
+        for inv in invoices:
+            if attachments_map is not None and inv["id"] in attachments_map:
+                atts = attachments_map[inv["id"]]
+            else:
+                from invoice_clipper.database import get_attachments
+                atts = get_attachments(inv["id"])
+            if not atts:
+                continue
+            inv_no = (inv.get("invoice_number") or f"INV-{inv['id']}").replace("/", "_")
+            seller = (inv.get("seller_name") or "unknown")[:20]
+            folder = f"{inv_no}_{seller}/"
+            for att in atts:
+                fp = Path(att["stored_path"])
+                if fp.exists():
+                    zf.write(str(fp), folder + (att.get("original_name") or fp.name))
+                    count += 1
+    if count == 0:
+        output_path.unlink(missing_ok=True)
+        return None
+    logger.info(f"附件 ZIP 打包完成: {output_path}，共 {count} 个附件")
+    return output_path
+
+
+def export_bundle(invoices: List[dict], export_dir: Path, label: str,
+                  export_mode: str = "invoice_only",
+                  package_mode: str = "merged_pdf",
+                  attachments_map: Optional[dict] = None) -> List[dict]:
+    """按导出与打包模式生成整套文件，返回 [{label, filename, path}]。
+
+    这套组合既用于首次导出，也用于报销单被财务退回后的重新生成，
+    两边的文件命名和内容必须一致，所以只保留一处实现。
+    """
+    export_dir = Path(export_dir)
+    export_dir.mkdir(parents=True, exist_ok=True)
+    include_attachments = export_mode == "with_attachments"
+    links: List[dict] = []
+
+    excel_path = export_dir / f"报销明细_{label}.xlsx"
+    export_excel(invoices, excel_path)
+    links.append({"label": "下载 Excel", "filename": excel_path.name, "path": excel_path})
+
+    if package_mode in ("merged_pdf", "both"):
+        pdf_path = export_dir / f"报销发票_{label}.pdf"
+        result = export_merged_pdf(
+            invoices, pdf_path,
+            attachments_map=attachments_map if include_attachments else None)
+        if result:
+            links.append({"label": "下载合并 PDF", "filename": pdf_path.name, "path": pdf_path})
+
+    if package_mode in ("source_zip", "both"):
+        zip_path = export_dir / f"源文件_{label}.zip"
+        result = export_zip_sources(invoices, zip_path, include_attachments=include_attachments)
+        if result:
+            links.append({"label": "下载源文件 ZIP", "filename": zip_path.name, "path": zip_path})
+
+    # 仅要合并 PDF 时，附件仍然单独打包一份，方便单独提交
+    if include_attachments and package_mode == "merged_pdf":
+        zip_path = export_dir / f"发票附件_{label}.zip"
+        if _zip_attachments(invoices, zip_path, attachments_map):
+            links.append({"label": "下载附件 ZIP", "filename": zip_path.name, "path": zip_path})
+
+    return links

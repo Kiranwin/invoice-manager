@@ -9,6 +9,7 @@ import json
 import logging
 from decimal import Decimal
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -32,6 +33,13 @@ INVOICE_COLS = [
 
 def amount_cents(value) -> int:
     return int((Decimal(str(value or 0)) * 100).quantize(Decimal("1")))
+
+
+def _now() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+BATCH_STATUSES = ("exported", "reported", "rejected", "voided")
 
 
 # ── 抽象基类 ──────────────────────────────────────
@@ -206,6 +214,185 @@ class DatabaseBackend(ABC):
         """根据标签 ID 列表获取所有关联的发票"""
         ...
 
+    # ── 报销单编辑（双方言共用实现）──────────────────
+    #
+    # 下面这些方法只在基类实现一次：SQL 统一用 `?` 占位，由 _sql() 转换到
+    # 各后端方言；事务通过各后端的 _transaction() 上下文拿到游标。
+
+    PLACEHOLDER = "?"
+
+    def _sql(self, sql: str) -> str:
+        """把中性的 `?` 占位符转换成当前后端使用的占位符。"""
+        return sql if self.PLACEHOLDER == "?" else sql.replace("?", self.PLACEHOLDER)
+
+    @contextmanager
+    def _transaction(self):
+        """产出一个可执行 SQL 的游标对象，正常退出时提交，异常时回滚。"""
+        raise NotImplementedError
+
+    def _batch_totals(self, cur, batch_id: int):
+        """在事务内重算报销单的张数与合计（单位：分）。"""
+        cur.execute(self._sql(
+            "SELECT COUNT(*), COALESCE(SUM(amount_cents), 0) "
+            "FROM reimbursement_items WHERE batch_id=?"), [batch_id])
+        row = cur.fetchone()
+        return int(row[0] or 0), int(row[1] or 0)
+
+    def get_reimbursement(self, batch_id: int) -> Optional[dict]:
+        """返回报销单及其发票明细、事件记录。"""
+        batch = self._fetchone(
+            self._sql("SELECT * FROM reimbursement_batches WHERE id=?"), [batch_id])
+        if not batch:
+            return None
+        batch["items"] = self._fetchall(self._sql(
+            "SELECT i.*, ri.amount_cents AS item_amount_cents "
+            "FROM reimbursement_items ri JOIN invoices i ON i.id = ri.invoice_id "
+            "WHERE ri.batch_id=? ORDER BY i.invoice_date ASC, i.id ASC"), [batch_id])
+        batch["events"] = self._fetchall(self._sql(
+            "SELECT * FROM reimbursement_events WHERE batch_id=? ORDER BY id DESC"), [batch_id])
+        return batch
+
+    def find_batch_for_invoice(self, invoice_id: int) -> Optional[int]:
+        """发票最近一次被纳入的报销单号。"""
+        row = self._fetchone(self._sql(
+            "SELECT batch_id FROM reimbursement_items WHERE invoice_id=? "
+            "ORDER BY batch_id DESC LIMIT 1"), [invoice_id])
+        return row["batch_id"] if row else None
+
+    def add_reimbursement_event(self, batch_id: int, action: str, detail: str = ""):
+        with self._transaction() as cur:
+            cur.execute(self._sql(
+                "INSERT INTO reimbursement_events (batch_id, created_at, action, detail) "
+                "VALUES (?, ?, ?, ?)"), [batch_id, _now(), action, detail])
+
+    def update_reimbursement_fields(self, batch_id: int, fields: dict) -> bool:
+        """更新报销单的非明细字段（备注、状态、输出文件、导出模式）。"""
+        allowed = {"note", "status", "output_files", "export_mode", "package_mode"}
+        updates = {k: v for k, v in fields.items() if k in allowed}
+        if not updates:
+            return False
+        if "status" in updates and updates["status"] not in BATCH_STATUSES:
+            raise ValueError(f"无效报销单状态: {updates['status']}")
+        if "output_files" in updates and not isinstance(updates["output_files"], str):
+            updates["output_files"] = json.dumps(updates["output_files"], ensure_ascii=False)
+        updates["updated_at"] = _now()
+        assignments = ", ".join(f"{key}=?" for key in updates)
+        return self._execute_update(
+            self._sql(f"UPDATE reimbursement_batches SET {assignments} WHERE id=?"),
+            [*updates.values(), batch_id]) > 0
+
+    def remove_reimbursement_items(self, batch_id: int, invoice_ids: List[int],
+                                   target_state: str = "ready") -> dict:
+        """把发票移出报销单，并把它们放回可报销池或标记为已排除。
+
+        这一步是「已报销」发票唯一的合法回退通道：明细、发票状态、合计金额
+        和事件记录在同一个事务里完成，不允许出现报销单与发票状态不一致。
+        """
+        if target_state not in ("ready", "excluded"):
+            raise ValueError(f"无效的发票去向: {target_state}")
+        ids = list(dict.fromkeys(int(i) for i in invoice_ids))
+        if not ids:
+            raise ValueError("请选择要移出的发票")
+        placeholders = ",".join("?" * len(ids))
+        now = _now()
+        with self._transaction() as cur:
+            cur.execute(self._sql(
+                "SELECT i.id, i.invoice_number, i.seller_name, i.amount_with_tax "
+                "FROM reimbursement_items ri JOIN invoices i ON i.id = ri.invoice_id "
+                f"WHERE ri.batch_id=? AND ri.invoice_id IN ({placeholders})"), [batch_id, *ids])
+            rows = cur.fetchall()
+            found = {row[0] for row in rows}
+            missing = [i for i in ids if i not in found]
+            if missing:
+                raise ValueError("发票不在该报销单中: " + "、".join(f"#{i}" for i in missing))
+            cur.execute(self._sql("SELECT status FROM reimbursement_batches WHERE id=?"), [batch_id])
+            batch_row = cur.fetchone()
+            if batch_row is None:
+                raise ValueError(f"报销单 #{batch_id} 不存在")
+            cur.execute(self._sql(
+                f"DELETE FROM reimbursement_items WHERE batch_id=? AND invoice_id IN ({placeholders})"),
+                [batch_id, *ids])
+            cur.execute(self._sql(
+                f"UPDATE invoices SET status=?, excluded=? WHERE id IN ({placeholders})"),
+                [target_state, int(target_state != "ready"), *ids])
+            count, total = self._batch_totals(cur, batch_id)
+            status = "voided" if count == 0 else batch_row[0]
+            cur.execute(self._sql(
+                "UPDATE reimbursement_batches SET total_cents=?, status=?, updated_at=? WHERE id=?"),
+                [total, status, now, batch_id])
+            target_label = "恢复为可报销" if target_state == "ready" else "标记为已排除"
+            for row in rows:
+                number = row[1] or "无号码"
+                seller = row[2] or "未知销售方"
+                amount = float(row[3] or 0)
+                cur.execute(self._sql(
+                    "INSERT INTO reimbursement_events (batch_id, created_at, action, detail) "
+                    "VALUES (?, ?, ?, ?)"),
+                    [batch_id, now, "removed",
+                     f"移出 {number}（{seller} ¥{amount:.2f}）→ {target_label}"])
+        return {"removed": len(rows), "item_count": count,
+                "total_cents": total, "status": status}
+
+    def add_reimbursement_items(self, batch_id: int, invoice_ids: List[int],
+                                mark_reported: bool = False) -> dict:
+        """把可报销发票补充进已有报销单。"""
+        ids = list(dict.fromkeys(int(i) for i in invoice_ids))
+        if not ids:
+            raise ValueError("请选择要加入的发票")
+        placeholders = ",".join("?" * len(ids))
+        rows = self._fetchall(self._sql(
+            "SELECT id, invoice_number, seller_name, amount_with_tax, status "
+            f"FROM invoices WHERE id IN ({placeholders})"), [*ids])
+        found = {row["id"]: row for row in rows}
+        missing = [i for i in ids if i not in found]
+        if missing:
+            raise ValueError("发票不存在: " + "、".join(f"#{i}" for i in missing))
+        unusable = [i for i in ids if found[i]["status"] != "ready"]
+        if unusable:
+            raise ValueError("只有可报销状态的发票能加入报销单: "
+                             + "、".join(f"#{i}" for i in unusable))
+        cents = {i: amount_cents(found[i]["amount_with_tax"]) for i in ids}
+        now = _now()
+        with self._transaction() as cur:
+            cur.execute(self._sql("SELECT status FROM reimbursement_batches WHERE id=?"), [batch_id])
+            batch_row = cur.fetchone()
+            if batch_row is None:
+                raise ValueError(f"报销单 #{batch_id} 不存在")
+            batch_status = batch_row[0]
+            if batch_status == "voided":
+                raise ValueError("报销单已作废，请新建报销单")
+            cur.execute(self._sql("SELECT invoice_id FROM reimbursement_items WHERE batch_id=?"),
+                        [batch_id])
+            existing = {row[0] for row in cur.fetchall()}
+            dup = [i for i in ids if i in existing]
+            if dup:
+                raise ValueError("发票已在该报销单中: " + "、".join(f"#{i}" for i in dup))
+            mark = bool(mark_reported or batch_status == "reported")
+            for inv_id in ids:
+                cur.execute(self._sql(
+                    "INSERT INTO reimbursement_items (batch_id, invoice_id, amount_cents) "
+                    "VALUES (?, ?, ?)"), [batch_id, inv_id, cents[inv_id]])
+            if mark:
+                cur.execute(self._sql(
+                    f"UPDATE invoices SET status='reported', excluded=1 WHERE id IN ({placeholders})"),
+                    [*ids])
+            count, total = self._batch_totals(cur, batch_id)
+            cur.execute(self._sql(
+                "UPDATE reimbursement_batches SET total_cents=?, updated_at=? WHERE id=?"),
+                [total, now, batch_id])
+            for inv_id in ids:
+                number = found[inv_id]["invoice_number"] or "无号码"
+                seller = found[inv_id]["seller_name"] or "未知销售方"
+                amount = float(found[inv_id]["amount_with_tax"] or 0)
+                cur.execute(self._sql(
+                    "INSERT INTO reimbursement_events (batch_id, created_at, action, detail) "
+                    "VALUES (?, ?, ?, ?)"),
+                    [batch_id, now, "added",
+                     f"加入 {number}（{seller} ¥{amount:.2f}）"
+                     + ("，并标记为已报销" if mark else "")])
+        return {"added": len(ids), "item_count": count,
+                "total_cents": total, "marked_reported": mark}
+
 
 # ── SQLite 后端 ──────────────────────────────────
 
@@ -251,6 +438,21 @@ class SQLiteBackend(DatabaseBackend):
             cur = conn.execute(sql, params or [])
             conn.commit()
             return cur.rowcount
+
+    PLACEHOLDER = "?"
+
+    @contextmanager
+    def _transaction(self):
+        conn = self.get_conn()
+        cur = conn.cursor()
+        try:
+            yield cur
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     # ── DDL ────────────────────────────────────────
 
@@ -308,6 +510,24 @@ class SQLiteBackend(DatabaseBackend):
                     PRIMARY KEY (batch_id, invoice_id)
                 )
             """)
+            # 报销单可编辑后新增的字段：备注、修改时间、生成参数
+            batch_columns = {row[1] for row in conn.execute("PRAGMA table_info(reimbursement_batches)")}
+            for column, column_type in (
+                ("note", "TEXT"), ("updated_at", "TEXT"),
+                ("export_mode", "TEXT"), ("package_mode", "TEXT"),
+            ):
+                if column not in batch_columns:
+                    conn.execute(f"ALTER TABLE reimbursement_batches ADD COLUMN {column} {column_type}")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS reimbursement_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    batch_id INTEGER NOT NULL REFERENCES reimbursement_batches(id) ON DELETE CASCADE,
+                    created_at TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    detail TEXT
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_reimb_event_batch ON reimbursement_events(batch_id)")
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS import_failures (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -421,7 +641,9 @@ class SQLiteBackend(DatabaseBackend):
             return batch_id
 
     def list_reimbursements(self) -> List[dict]:
-        return self._fetchall("SELECT * FROM reimbursement_batches ORDER BY id DESC")
+        return self._fetchall(
+            "SELECT b.*, (SELECT COUNT(*) FROM reimbursement_items ri WHERE ri.batch_id=b.id) AS item_count "
+            "FROM reimbursement_batches b ORDER BY b.id DESC")
 
     def invoice_has_reimbursement(self, inv_id: int) -> bool:
         return self._fetchone("SELECT 1 FROM reimbursement_items WHERE invoice_id=?", [inv_id]) is not None
@@ -724,6 +946,21 @@ class PostgreSQLBackend(DatabaseBackend):
         """Placeholder converter: SQLite ? → PG %s (no-op, psycopg2 uses %s style)"""
         return params
 
+    PLACEHOLDER = "%s"
+
+    @contextmanager
+    def _transaction(self):
+        conn = self.get_conn()
+        try:
+            with conn.cursor() as cur:
+                yield cur
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
     # ── DDL ────────────────────────────────────────
 
     def init_db(self):
@@ -777,6 +1014,25 @@ class PostgreSQLBackend(DatabaseBackend):
                         amount_cents BIGINT NOT NULL,
                         PRIMARY KEY (batch_id, invoice_id)
                     )
+                """)
+                # 报销单可编辑后新增的字段 + 事件表
+                for column, column_type in (
+                    ("note", "TEXT"), ("updated_at", "TEXT"),
+                    ("export_mode", "TEXT"), ("package_mode", "TEXT"),
+                ):
+                    cur.execute(
+                        f"ALTER TABLE reimbursement_batches ADD COLUMN IF NOT EXISTS {column} {column_type}")
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS reimbursement_events (
+                        id SERIAL PRIMARY KEY,
+                        batch_id INTEGER NOT NULL REFERENCES reimbursement_batches(id) ON DELETE CASCADE,
+                        created_at TEXT NOT NULL,
+                        action TEXT NOT NULL,
+                        detail TEXT
+                    )
+                """)
+                cur.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_reimb_event_batch ON reimbursement_events(batch_id)
                 """)
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS import_failures (
@@ -911,7 +1167,9 @@ class PostgreSQLBackend(DatabaseBackend):
             return batch_id
 
     def list_reimbursements(self) -> List[dict]:
-        return self._fetchall("SELECT * FROM reimbursement_batches ORDER BY id DESC")
+        return self._fetchall(
+            "SELECT b.*, (SELECT COUNT(*) FROM reimbursement_items ri WHERE ri.batch_id=b.id) AS item_count "
+            "FROM reimbursement_batches b ORDER BY b.id DESC")
 
     def invoice_has_reimbursement(self, inv_id: int) -> bool:
         return self._fetchone("SELECT 1 FROM reimbursement_items WHERE invoice_id=%s", [inv_id]) is not None
