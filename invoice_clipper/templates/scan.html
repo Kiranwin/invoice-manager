@@ -6,53 +6,8 @@
   <div class="btn-group"><span class="page-chip">{{ pending_invoices | length }} 张待确认</span><a href="/list?status=待确认" class="btn btn-outline btn-sm">查看全部</a></div>
 </div>
 
-<div class="card">
-  <h3>待确认 · {{ pending_invoices | length }} 张</h3>
-  {% if pending_invoices %}
-  <div class="table-wrap">
-    <table>
-      <thead><tr><th>开票日期</th><th>发票号码</th><th>销售方</th><th>金额</th><th>操作</th></tr></thead>
-      <tbody>
-      {% for inv in pending_invoices %}
-      <tr>
-        <td>{{ inv.invoice_date or '-' }}</td>
-        <td>{{ inv.invoice_number or '-' }}</td>
-        <td>{{ inv.seller_name or '-' }}</td>
-        <td class="money">¥{{ "%.2f" | format(inv.amount_with_tax or 0) }}</td>
-        <td><a href="/list/{{ inv.id }}" class="btn btn-outline btn-sm">核对发票</a></td>
-      </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% else %}<p class="empty-hint">没有待确认发票。上传文件后会在这里等待核对。</p>{% endif %}
-</div>
-
-<div class="card">
-  <div class="section-heading">
-    <div>
-      <h3>识别失败 · {{ failures | length }} 个</h3>
-      <p>{% if failures %}原文件占用 {{ failure_size_label }} · 超过 {{ failure_retention_days }} 天的记录会在启动时自动清理{% else %}识别失败的文件会保留原文件，方便重试{% endif %}</p>
-    </div>
-    {% if failures %}
-    <form method="POST" action="/inbox/failures/purge">
-      <button type="submit" class="btn btn-outline btn-sm" onclick="return confirm('清理超过 {{ failure_retention_days }} 天的失败记录？') ">清理过期记录</button>
-    </form>
-    {% endif %}
-  </div>
-  {% if failures %}
-  <div class="table-wrap"><table>
-    <thead><tr><th>文件</th><th>失败原因</th><th>时间</th><th>操作</th></tr></thead>
-    <tbody>{% for item in failures %}
-      <tr><td>{{ item.original_filename }}</td><td>{{ item.error }}</td><td>{{ item.created_at[:16] | replace('T', ' ') }}</td>
-        <td class="action-cell">
-          <form method="POST" action="/inbox/failures/{{ item.id }}/retry" style="display:inline;"><button type="submit" class="btn btn-outline btn-sm">重试识别</button></form>
-          <form method="POST" action="/inbox/failures/{{ item.id }}/delete" style="display:inline;" onsubmit="return confirm('删除这条失败记录和它的原文件？')"><button type="submit" class="btn-icon danger" title="忽略并删除">✕</button></form>
-        </td></tr>
-    {% endfor %}</tbody>
-  </table></div>
-  {% else %}<p class="empty-hint">暂无识别失败的文件。</p>{% endif %}
-</div>
+<div class="inbox-layout">
+  <div class="inbox-primary">
 
 <div class="card upload-card">
   <div class="section-heading"><div><h3>导入发票</h3><p>支持 PDF、OFD、PNG、JPG 等格式，可一次选择多个文件。</p></div><span class="upload-badge">OCR</span></div>
@@ -96,6 +51,68 @@
     <div class="scan-progress-hint">发票识别通常需要 3-15 秒，文件越大耗时越长；可以关掉页面，已入库的不会重复</div>
     <div class="scan-progress-list" id="scan-progress-list"></div>
   </div>
+</div>
+
+  </div>
+  <aside class="inbox-secondary">
+
+<div class="card">
+  <div class="section-heading">
+    <div><h3>待确认 · {{ pending_invoices | length }} 张</h3><p>识别完先核对金额和销售方，再确认入库。</p></div>
+    {% if pending_invoices %}
+    <form method="POST" action="/inbox/confirm-all" onsubmit="return confirm('确认这 {{ pending_invoices | length }} 张发票？确认后会进入可报销池。')">
+      <button type="submit" class="btn btn-outline btn-sm">全部确认</button>
+    </form>
+    {% endif %}
+  </div>
+  {% if pending_invoices %}
+  <div class="compact-list">
+    {% for inv in pending_invoices %}
+    <a class="compact-row" href="/list/{{ inv.id }}">
+      <div class="compact-main">
+        <strong>{{ inv.seller_name or '未知销售方' }}</strong>
+        <span>{{ inv.invoice_date or '无日期' }}{% if inv.invoice_number %} · {{ inv.invoice_number }}{% endif %}</span>
+      </div>
+      <div class="compact-amount">¥{{ "%.2f" | format(inv.amount_with_tax or 0) }}</div>
+      <span class="compact-action">核对</span>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}<p class="empty-hint">没有待确认发票。上传文件后会在这里等待核对。</p>{% endif %}
+</div>
+
+<div class="card">
+  <div class="section-heading">
+    <div>
+      <h3>识别失败 · {{ failures | length }} 个</h3>
+      <p>{% if failures %}原文件占用 {{ failure_size_label }} · 超过 {{ failure_retention_days }} 天的记录会在启动时自动清理{% else %}识别失败的文件会保留原文件，方便重试{% endif %}</p>
+    </div>
+    {% if failures %}
+    <form method="POST" action="/inbox/failures/purge">
+      <button type="submit" class="btn btn-ghost btn-sm" onclick="return confirm('清理超过 {{ failure_retention_days }} 天的失败记录？')">清理过期</button>
+    </form>
+    {% endif %}
+  </div>
+  {% if failures %}
+  <div class="compact-list">
+    {% for item in failures %}
+    <div class="compact-row static">
+      <div class="compact-main">
+        <strong>{{ item.original_filename }}</strong>
+        <p class="compact-error">{{ item.error }}</p>
+        <small>{{ item.created_at[:16] | replace('T', ' ') }}</small>
+      </div>
+      <div class="compact-actions">
+        <form method="POST" action="/inbox/failures/{{ item.id }}/retry"><button type="submit" class="btn btn-outline btn-sm">重试</button></form>
+        <form method="POST" action="/inbox/failures/{{ item.id }}/delete" onsubmit="return confirm('删除这条失败记录和它的原文件？')"><button type="submit" class="btn-icon danger" title="忽略并删除">✕</button></form>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}<p class="empty-hint">暂无识别失败的文件。</p>{% endif %}
+</div>
+
+  </aside>
 </div>
 
 <script>

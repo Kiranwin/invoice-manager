@@ -347,6 +347,22 @@ def retry_failed_import(request: Request, failure_id: int):
     return flash_redirect("/inbox", "重试仍未识别成功，请检查识别引擎配置或文件内容", "warning")
 
 
+@app.post("/inbox/confirm-all")
+def confirm_all_pending(request: Request):
+    """一键确认收件箱里的待确认发票。"""
+    pending = _pending_invoices()
+    if not pending:
+        return flash_redirect("/inbox", "没有待确认的发票", "warning")
+    confirmed = 0
+    for inv in pending:
+        try:
+            change_invoice_state(inv["id"], "ready")
+            confirmed += 1
+        except ValueError:
+            continue
+    return flash_redirect("/inbox", f"已确认 {confirmed} 张发票，移入可报销池")
+
+
 @app.post("/inbox/failures/{failure_id}/delete")
 def delete_failed_import(failure_id: int):
     """忽略一条失败记录，同时清掉 failed_imports 里的原文件。"""
