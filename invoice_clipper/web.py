@@ -29,6 +29,7 @@ from invoice_clipper import (
 from contextlib import asynccontextmanager
 
 from invoice_clipper.mcp_server import mcp as mcp_server
+from invoice_clipper.checks import invoice_issues, issue_summary
 from invoice_clipper.workflow import (
     change_invoice_state, delete_invoice_with_files, reimbursable_invoices,
     record_reimbursement, list_reimbursements, amount_cents,
@@ -200,7 +201,14 @@ def root():
 
 def _pending_invoices() -> list[dict]:
     """Return invoices that still need a human confirmation."""
-    return query_invoices({"statuses": ["pending"], "only_included": False})
+    pending = query_invoices({"statuses": ["pending"], "only_included": False})
+    for inv in pending:
+        issues = invoice_issues(inv)
+        inv["_issues"] = issues
+        inv["_issue_summary"] = issue_summary(issues)
+    # 有问题的排前面，其次按金额从大到小，先核对金额大的
+    pending.sort(key=lambda i: (not i["_issues"], -(i.get("amount_with_tax") or 0)))
+    return pending
 
 
 def _human_size(size: int) -> str:
@@ -442,6 +450,13 @@ def get_list(request: Request,
 
     page_urls = {n: make_url(page=n) for n in range(1, total_pages + 1)} if total_pages <= 9 else {}
 
+    # 本页需要人工确认的字段问题，列在状态旁边提醒
+    issue_counts = {}
+    for inv in invoices:
+        issues = invoice_issues(inv)
+        if issues:
+            issue_counts[inv["id"]] = issue_summary(issues)
+
     ctx = get_flash(request)
     ctx.update({
         "page": "list",
@@ -458,6 +473,7 @@ def get_list(request: Request,
         "projects": get_projects(),
         "persons": get_persons(),
         "stats": invoice_stats(),
+        "issue_counts": issue_counts,
         "sort": sort,
         "dir": dir,
         "sort_links": sort_links,
@@ -622,6 +638,8 @@ def get_edit(request: Request, inv_id: int):
         "all_tags": get_tags(),
         "invoice_tags": get_invoice_tags(inv_id),
         "reimbursement_batch": batch_for_invoice(inv_id),
+        "issues": invoice_issues(dict(inv)),
+        "issue_summary": issue_summary(invoice_issues(dict(inv))),
         "raw_json": json.dumps(dict(inv), ensure_ascii=False, indent=2, default=str),
     })
     return templates.TemplateResponse(request, "edit.html", ctx)

@@ -72,6 +72,11 @@
       <div class="compact-main">
         <strong>{{ inv.seller_name or '未知销售方' }}</strong>
         <span>{{ inv.invoice_date or '无日期' }}{% if inv.invoice_number %} · {{ inv.invoice_number }}{% endif %}</span>
+        {% if inv._issue_summary.total %}
+        <p class="compact-issue {{ inv._issues[0].level }}">
+          {{ inv._issue_summary.first }}{% if inv._issue_summary.total > 1 %} 等 {{ inv._issue_summary.total }} 处{% endif %}
+        </p>
+        {% endif %}
       </div>
       <div class="compact-amount">¥{{ "%.2f" | format(inv.amount_with_tax or 0) }}</div>
       <span class="compact-action">核对</span>

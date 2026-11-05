@@ -1192,6 +1192,37 @@ body.has-action-bar .content { padding-bottom: 96px; }
   .action-bar .btn { margin-left: auto; }
 }
 
+/* ── 发票核对提示 ───────────────────────────── */
+.issue-panel {
+  background: #fffaf0; border: 1px solid #fde8c7; border-radius: 13px;
+  padding: 14px 18px; margin-bottom: 16px;
+}
+.issue-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.issue-head strong { font-size: 13px; color: #92400e; }
+.issue-head span { font-size: 12px; color: #b08a5a; }
+.issue-list { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.issue-item { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-size: 12px; }
+.issue-tag {
+  flex: 0 0 auto; padding: 1px 7px; border-radius: 999px;
+  font-size: 11px; font-weight: 600; background: #fff1d6; color: #a66410;
+}
+.issue-item.error .issue-tag { background: #ffebee; color: #b34855; }
+.issue-item a { color: #45526a; text-decoration: none; border-bottom: 1px dashed #d8c6a8; }
+.issue-item a:hover { color: var(--blue); border-color: var(--blue); }
+.issue-msg { color: #7a6a55; }
+.issue-item.error .issue-msg { color: #8a4a52; }
+.compact-issue {
+  font-size: 11px; margin-top: 3px; color: #a66410; line-height: 1.4;
+  display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden;
+}
+.compact-issue.error { color: #b34855; }
+.issue-badge {
+  display: inline-block; margin-left: 6px; font-size: 10px; font-weight: 600;
+  padding: 1px 5px; border-radius: 999px; background: #fff4df; color: #a66410;
+  vertical-align: middle;
+}
+.issue-badge.error { background: #ffebee; color: #b34855; }
+
 /* ── 列表排序与分页 ─────────────────────────────── */
 .th-sort { color: inherit; text-decoration: none; display: inline-flex; align-items: center; cursor: pointer; }
 .th-sort:hover { color: #0c0a09; }
