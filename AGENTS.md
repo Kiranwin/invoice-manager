@@ -57,7 +57,13 @@ python -c "import re; p=r'<正则>'; cases=['样例1','样例2']; [print(c, bool
 ```bash
 # 语法 / 导入检查
 uv run python -c "import invoice_clipper.web"
+
+# 纯逻辑回归自检（字段检查、金额解析、按分取整、报销单合计）
+uv run python tools/selfcheck.py
 ```
+
+自检脚本不依赖 pytest，在临时库上跑，不碰真实数据。改动金额、状态迁移、
+报销单或字段检查相关逻辑时，提交前必须跑一次并且全绿。
 
 ### 2.2 功能验证
 

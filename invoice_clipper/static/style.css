@@ -1222,6 +1222,13 @@ body.has-action-bar .content { padding-bottom: 96px; }
   vertical-align: middle;
 }
 .issue-badge.error { background: #ffebee; color: #b34855; }
+/* 从核对面板点字段名跳过来时，高亮落点 */
+.form-group input:target,
+.form-group select:target,
+.form-group textarea:target {
+  border-color: #d88924;
+  box-shadow: 0 0 0 3px rgba(216,137,36,.15);
+}
 
 /* ── 列表排序与分页 ─────────────────────────────── */
 .th-sort { color: inherit; text-decoration: none; display: inline-flex; align-items: center; cursor: pointer; }
@@ -1248,4 +1255,63 @@ body.has-action-bar .content { padding-bottom: 96px; }
 .pagination-size a.active { color: var(--blue); background: var(--blue-soft); border-color: #d9e2ff; }
 @media (max-width: 760px) {
   .pagination { flex-direction: column; align-items: flex-start; }
+}
+
+/* ── 手机端表格卡片化 ───────────────────────────── */
+@media (max-width: 760px) {
+  /* 表格、行组降成块级，避免匿名表格盒把卡片宽度按列重算 */
+  .table-card { display: block; min-width: 0; }
+  .table-card thead { display: none; }
+  .table-card tbody { display: block; }
+
+  .table-card tr {
+    display: block;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 12px 14px;
+    margin-bottom: 10px;
+    position: relative;
+  }
+  .table-card tbody tr:last-child { margin-bottom: 0; }
+
+  .table-card td {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: baseline;
+    border: 0;
+    padding: 3px 0;
+  }
+
+  /* 行内字段名 */
+  .table-card td::before {
+    content: attr(data-label);
+    flex: 0 0 62px;
+    color: #94a3b8;
+    font-size: 11px;
+  }
+
+  /* 复选框固定在卡片右上角 */
+  .table-card td.checkbox-cell {
+    position: absolute;
+    right: 10px;
+    top: 10px;
+    width: auto;
+    padding: 0;
+  }
+  .table-card td.checkbox-cell::before { content: none; }
+
+  /* 操作格不显示字段名，与上一行留出间距 */
+  .table-card td.action-cell {
+    justify-content: flex-start;
+    gap: 6px;
+    margin-top: 8px;
+    padding-top: 0;
+  }
+  .table-card td.action-cell::before { content: none; }
+
+  /* 金额改左对齐，不强行右浮 */
+  .table-card td.money { text-align: left; }
+  .table-card td.money strong { font-size: 14px; }
 }

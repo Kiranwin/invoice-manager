@@ -133,14 +133,18 @@ def parse_amount_filter(raw: str) -> tuple[int | None, int | None]:
     """把金额输入解析为 (最小分, 最大分)。
 
     支持 `100` / `>=100` / `<=100` / `>100` / `<100` / `100-200`，
-    空输入返回 (None, None)，格式错误抛 ValueError。
+    空输入返回 (None, None)，格式错误抛 ValueError（不能让残缺输入静默
+    变成 0 元区间，那会直接查不到任何票）。
     """
     text = (raw or "").replace("¥", "").replace("￥", "").replace(",", "").strip()
     if not text:
         return None, None
 
     def cents(part: str) -> int:
-        return amount_cents(part.strip())
+        cleaned = part.strip()
+        if not re.fullmatch(r"\d+(\.\d+)?", cleaned):
+            raise ValueError(f"无法识别的金额: {raw}")
+        return amount_cents(cleaned)
 
     if text.startswith((">=", "<=")):
         value = cents(text[2:])

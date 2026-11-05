@@ -101,7 +101,7 @@
       </div>
       {% if items %}
       <div class="table-wrap" style="box-shadow: none; border-radius: 0;">
-        <table id="item-table">
+        <table id="item-table" class="table-card">
           <thead>
             <tr>
               <th class="checkbox-cell"><input type="checkbox" id="select-all" title="全选"></th>
@@ -117,15 +117,15 @@
             {% for inv in items %}
             <tr class="{{ 'excluded' if inv.status == 'excluded' else '' }}">
               <td class="checkbox-cell"><input type="checkbox" class="row-checkbox" value="{{ inv.id }}"></td>
-              <td class="date-cell">{{ inv.invoice_date or '-' }}</td>
-              <td class="invoice-main-cell">
+              <td class="date-cell" data-label="日期">{{ inv.invoice_date or '-' }}</td>
+              <td class="invoice-main-cell" data-label="发票">
                 <a href="/list/{{ inv.id }}"><strong>{{ inv.seller_name or '未知销售方' }}</strong></a>
                 <span>{{ inv.invoice_number or '暂无发票号码' }}</span>
                 <small>{{ inv.buyer_name or '未填写购买方' }}</small>
               </td>
-              <td class="invoice-main-cell"><strong>{{ inv.commodity_name or '未填写项目' }}</strong><span>{{ inv.category or '未分类' }}</span></td>
-              <td class="money amount-cell"><strong>¥{{ "%.2f" | format(inv.amount_with_tax or 0) }}</strong><span>税额 ¥{{ "%.2f" | format(inv.tax_amount or 0) }}</span></td>
-              <td class="center"><span class="status-pill status-{{ inv_status.get(inv.status, ('', 'muted'))[1] }}">{{ inv_status.get(inv.status, (inv.status, 'muted'))[0] }}</span></td>
+              <td class="invoice-main-cell" data-label="项目"><strong>{{ inv.commodity_name or '未填写项目' }}</strong><span>{{ inv.category or '未分类' }}</span></td>
+              <td class="money amount-cell" data-label="金额"><strong>¥{{ "%.2f" | format(inv.amount_with_tax or 0) }}</strong><span>税额 ¥{{ "%.2f" | format(inv.tax_amount or 0) }}</span></td>
+              <td class="center" data-label="状态"><span class="status-pill status-{{ inv_status.get(inv.status, ('', 'muted'))[1] }}">{{ inv_status.get(inv.status, (inv.status, 'muted'))[0] }}</span></td>
               <td class="action-cell">
                 <form method="POST" action="/reimbursements/{{ batch.id }}/remove" class="inline-action">
                   <input type="hidden" name="ids" value="{{ inv.id }}">
@@ -166,7 +166,7 @@
       </div>
       <form method="POST" action="/reimbursements/{{ batch.id }}/add">
         <div class="table-wrap" style="box-shadow: none; border: 1px solid var(--line);">
-          <table id="picker-table">
+          <table id="picker-table" class="table-card">
             <thead>
               <tr>
                 <th class="checkbox-cell"><input type="checkbox" id="picker-select-all" title="全选"></th>
@@ -180,10 +180,10 @@
               {% for inv in available %}
               <tr class="picker-row" data-search="{{ ((inv.seller_name or '') ~ ' ' ~ (inv.invoice_number or '') ~ ' ' ~ (inv.commodity_name or '')) | lower }}">
                 <td class="checkbox-cell"><input type="checkbox" name="ids" value="{{ inv.id }}"></td>
-                <td class="date-cell">{{ inv.invoice_date or '-' }}</td>
-                <td class="invoice-main-cell"><strong>{{ inv.seller_name or '未知销售方' }}</strong><span>{{ inv.invoice_number or '暂无发票号码' }}</span></td>
-                <td class="invoice-main-cell"><strong>{{ inv.commodity_name or '未填写项目' }}</strong><span>{{ inv.category or '未分类' }}</span></td>
-                <td class="money amount-cell"><strong>¥{{ "%.2f" | format(inv.amount_with_tax or 0) }}</strong></td>
+                <td class="date-cell" data-label="日期">{{ inv.invoice_date or '-' }}</td>
+                <td class="invoice-main-cell" data-label="发票"><strong>{{ inv.seller_name or '未知销售方' }}</strong><span>{{ inv.invoice_number or '暂无发票号码' }}</span></td>
+                <td class="invoice-main-cell" data-label="项目"><strong>{{ inv.commodity_name or '未填写项目' }}</strong><span>{{ inv.category or '未分类' }}</span></td>
+                <td class="money amount-cell" data-label="金额"><strong>¥{{ "%.2f" | format(inv.amount_with_tax or 0) }}</strong></td>
               </tr>
               {% endfor %}
             </tbody>

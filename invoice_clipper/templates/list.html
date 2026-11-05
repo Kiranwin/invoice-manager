@@ -83,7 +83,7 @@
 {% if invoices %}
 <div class="card" style="padding: 0; overflow: hidden;">
   <div class="table-wrap">
-    <table id="invoice-table">
+    <table id="invoice-table" class="table-card">
       <thead>
         <tr>
           <th class="checkbox-cell"><input type="checkbox" id="select-all" title="全选当前页"></th>
@@ -102,13 +102,13 @@
         {% set excluded = inv.status == 'excluded' %}
         <tr class="{{ 'excluded' if excluded else '' }}">
           <td class="checkbox-cell"><input type="checkbox" class="row-checkbox" value="{{ inv.id }}" data-status="{{ inv.status }}" data-invoice-number="{{ inv.invoice_number or '' }}"></td>
-          <td class="clickable date-cell" onclick="location.href='/list/{{ inv.id }}'">{{ inv.invoice_date or '-' }}</td>
-          <td class="clickable invoice-main-cell" onclick="location.href='/list/{{ inv.id }}'"><strong>{{ inv.seller_name or '未知销售方' }}</strong><span>{{ inv.invoice_number or '暂无发票号码' }}</span><small>{{ inv.buyer_name or '未填写购买方' }}</small></td>
-          <td class="clickable invoice-main-cell" onclick="location.href='/list/{{ inv.id }}'"><strong>{{ inv.commodity_name or '未填写项目' }}</strong><span>{{ inv.category or '未分类' }}</span></td>
-          <td class="money clickable amount-cell" onclick="location.href='/list/{{ inv.id }}'"><strong>{{ "¥%.2f" | format(inv.amount_with_tax or 0) }}</strong><span>税额 ¥{{ "%.2f" | format(inv.tax_amount or 0) }}</span></td>
-          <td class="clickable invoice-main-cell" onclick="location.href='/list/{{ inv.id }}'"><strong>{{ inv.belong_project or '未分配项目' }}</strong><span>{{ inv.belong_person or '未分配归属人' }}</span></td>
-          <td class="center clickable" onclick="location.href='/list/{{ inv.id }}'"><span class="tag {{ {'pending': 'tag-warning', 'ready': 'tag-success', 'excluded': 'tag-danger', 'reported': 'tag-primary'}.get(inv.status, '') }}">{{ status_labels.get(inv.status, inv.status) }}</span>{% set iss = issue_counts.get(inv.id) %}{% if iss %}<span class="issue-badge {{ 'error' if iss.error_count else 'warn' }}" title="{{ iss.first }}">⚠{{ iss.total }}</span>{% endif %}</td>
-          <td class="tag-cell clickable" onclick="location.href='/list/{{ inv.id }}'">
+          <td class="clickable date-cell" onclick="location.href='/list/{{ inv.id }}'" data-label="日期">{{ inv.invoice_date or '-' }}</td>
+          <td class="clickable invoice-main-cell" onclick="location.href='/list/{{ inv.id }}'" data-label="发票"><strong>{{ inv.seller_name or '未知销售方' }}</strong><span>{{ inv.invoice_number or '暂无发票号码' }}</span><small>{{ inv.buyer_name or '未填写购买方' }}</small></td>
+          <td class="clickable invoice-main-cell" onclick="location.href='/list/{{ inv.id }}'" data-label="项目"><strong>{{ inv.commodity_name or '未填写项目' }}</strong><span>{{ inv.category or '未分类' }}</span></td>
+          <td class="money clickable amount-cell" onclick="location.href='/list/{{ inv.id }}'" data-label="金额"><strong>{{ "¥%.2f" | format(inv.amount_with_tax or 0) }}</strong><span>税额 ¥{{ "%.2f" | format(inv.tax_amount or 0) }}</span></td>
+          <td class="clickable invoice-main-cell" onclick="location.href='/list/{{ inv.id }}'" data-label="归属"><strong>{{ inv.belong_project or '未分配项目' }}</strong><span>{{ inv.belong_person or '未分配归属人' }}</span></td>
+          <td class="center clickable" onclick="location.href='/list/{{ inv.id }}'" data-label="状态"><span class="tag {{ {'pending': 'tag-warning', 'ready': 'tag-success', 'excluded': 'tag-danger', 'reported': 'tag-primary'}.get(inv.status, '') }}">{{ status_labels.get(inv.status, inv.status) }}</span>{% set iss = issue_counts.get(inv.id) %}{% if iss %}<span class="issue-badge {{ 'error' if iss.error_count else 'warn' }}" title="{{ iss.first }}">⚠{{ iss.total }}</span>{% endif %}</td>
+          <td class="tag-cell clickable" onclick="location.href='/list/{{ inv.id }}'" data-label="标签">
             {% set inv_tags = invoice_tags.get(inv.id, []) %}
             {% for t in inv_tags[:3] %}
             <span class="tag-badge-sm" style="background: {{ t.color }}20; color: {{ t.color }}; border: 1px solid {{ t.color }}40;">{{ t.name }}</span>
