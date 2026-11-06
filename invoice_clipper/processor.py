@@ -162,10 +162,28 @@ class InvoiceProcessor:
         )
         return record
 
+    def _no_engine_hint(self) -> str:
+        """引擎列表为空时，说清楚到底是没启用还是缺凭据。"""
+        ocr_cfg = (self.cfg.get("ocr") or {})
+        baidu = ocr_cfg.get("baidu") or {}
+        llm = ocr_cfg.get("llm") or {}
+        text_ocr = ocr_cfg.get("text_ocr") or {}
+
+        hints = []
+        if baidu.get("enabled") and not (baidu.get("api_key") and baidu.get("secret_key")):
+            hints.append("百度 OCR 已启用但缺少 api_key / secret_key")
+        if llm.get("enabled") and not llm.get("api_key"):
+            hints.append("LLM 视觉已启用但缺少 api_key")
+        if text_ocr.get("enabled"):
+            hints.append("本地 OCR 已启用但依赖未安装（需要 paddleocr）")
+        if not hints:
+            return "没有可用的识别引擎，请在 config.yaml 的 ocr 段启用至少一个引擎"
+        return "没有可用的识别引擎：" + "；".join(hints)
+
     def _recognize(self, file_path: Path) -> Optional[Dict[str, Any]]:
         """执行多级识别引擎，单个引擎抛错不影响后续层级"""
         if not self.engines:
-            self._error = "没有可用的识别引擎，请在 config.yaml 中启用至少一个 OCR 引擎"
+            self._error = self._no_engine_hint()
             logger.error(self._error)
             return None
 
