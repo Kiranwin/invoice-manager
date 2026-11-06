@@ -227,6 +227,10 @@ docker compose logs -f
 
 三点须知：
 
+- 镜像里的依赖按 `uv.lock` 安装（`uv sync --frozen --no-editable`），mcp、fastapi
+  这些包的版本与仓库锁定的一致，不会因为上游发新版就变；构建分两阶段，运行
+  阶段只带走 `.venv`。代价是 lock 里记的国内镜像源在境外 CI 上可能偏慢，实在
+  拖太久就把 `uv.lock` 换成官方 PyPI 重锁一次。
 - 目录权限默认不需要管：容器读取 `./data` 的属主并以同一 uid/gid 运行，
   空目录（root 新建、属主 0）会回退到 `1000:1000` 并把目录改归属主。只有想
   强制指定运行用户时才设 `PUID`/`PGID`；写 `PUID=0` 则以 root 运行，容器内
