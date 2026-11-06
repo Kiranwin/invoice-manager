@@ -168,6 +168,44 @@ uv run python -m invoice_clipper
 
 ---
 
+## 🐳 Docker 部署
+
+适合放到 NAS 或小主机上常驻，手机随时上传。
+
+```bash
+mkdir -p data && sudo chown -R 1000:1000 data
+docker compose up -d --build
+docker compose logs -f
+```
+
+浏览器打开 `http://localhost:8000`。首次启动会在 `./data/config.yaml` 生成配置，
+填入 OCR 的 API Key 后 `docker compose restart` 即生效。
+
+数据全在 `./data`：
+
+| 路径 | 内容 |
+|------|------|
+| `config.yaml` | 配置文件 |
+| `invoices.db` | SQLite 数据库 |
+| `invoices/` | 归档的发票原件 |
+| `exports/` | 报销单导出文件 |
+| `failed_imports/` | 识别失败的原文件（30 天后自动清理） |
+
+备份和换机器只需要拷走 `./data` 整个目录。
+
+三点须知：
+
+- 容器以 uid 1000 运行，宿主机的 `./data` 必须让这个 uid 可写，否则启动后
+  写库、归档都会失败（上面第一行命令就是在做这件事）。
+- 镜像只装核心依赖，**不含本地 PaddleOCR**。要本地离线识别得自己加
+  `paddlepaddle` + `paddleocr`，镜像会从约 300MB 涨到 2G 以上。建议容器里
+  用百度或大模型 API。
+- 服务本身没有鉴权，`docker-compose.yml` 默认只映射到 `127.0.0.1`。改成
+  `8000:8000` 就是局域网内任意设备可进，包括 `/mcp` 接口。不要直接暴露到公网，
+  确需外网访问请在前面放一层带认证的反向代理。
+
+---
+
 ## ⚙️ 配置
 
 ### 配置文件搜索顺序

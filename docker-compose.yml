@@ -1,0 +1,24 @@
+# 发票夹子 Docker Compose
+#
+# 首次使用：
+#   mkdir -p data && sudo chown -R 1000:1000 data
+#   docker compose up -d --build
+#   docker compose logs -f
+#
+# 数据全部落在 ./data：config.yaml、invoices.db、invoices/、exports/、failed_imports/
+# 迁移或备份时整目录拷走即可。
+
+services:
+  invoice-manager:
+    build:
+      context: .
+    image: invoice-manager:latest
+    container_name: invoice-manager
+    restart: unless-stopped
+    ports:
+      # 只映射到本机回环，需要局域网访问时改成 "8000:8000"
+      - "127.0.0.1:8000:8000"
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      - ./data:/data
