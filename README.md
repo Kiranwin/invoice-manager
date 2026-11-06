@@ -2,7 +2,7 @@
   <img src="https://img.shields.io/badge/Python-3.12+-blue.svg" alt="Python 3.12+">
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License">
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg" alt="Platform">
-  <img src="https://img.shields.io/badge/Version-3.6.0-brightgreen.svg" alt="v3.6.0">
+  <img src="https://img.shields.io/badge/Version-3.6.1-brightgreen.svg" alt="v3.6.1">
 </p>
 
 <h1 align="center">发票夹子 🧾</h1>
@@ -37,7 +37,7 @@
 
 ```bash
 # 从 Wheel 包安装
-pip install dist/invoice_manager-3.6.0-py3-none-any.whl
+pip install dist/invoice_manager-3.6.1-py3-none-any.whl
 ```
 
 ### 启动 Web UI
@@ -147,7 +147,7 @@ MCP Server 暴露以下 23 个工具，覆盖发票管理全流程：
 ### Wheel 包（推荐）
 
 ```bash
-pip install dist/invoice_manager-3.6.0-py3-none-any.whl
+pip install dist/invoice_manager-3.6.1-py3-none-any.whl
 ```
 
 安装后可用命令：
@@ -187,7 +187,7 @@ docker pull ghcr.io/kiranwin/invoice-manager:latest
 ```yaml
 services:
   invoice-manager:
-    image: ghcr.io/kiranwin/invoice-manager:3.6.0
+    image: ghcr.io/kiranwin/invoice-manager:3.6.1
     container_name: invoice-manager
     restart: unless-stopped
     ports:
@@ -342,7 +342,7 @@ invoice-manager/
 │   ├── __init__.py               # load_config + 所有模块导出
 │   ├── __main__.py               # pip 入口点
 │   ├── __run__.py                # 进程锁启动入口（支持 --debug）
-│   ├── web.py                    # FastAPI Web UI (v3.6.0)
+│   ├── web.py                    # FastAPI Web UI (v3.6.1)
 │   ├── mcp_server.py             # MCP AI Agent 接口
 │   ├── database.py               # 数据库调度层
 │   ├── db_backends.py            # SQLite + PostgreSQL 后端
@@ -370,7 +370,7 @@ invoice-manager/
 │       ├── baidu_ocr.py          # 百度 OCR
 │       └── llm_vision.py         # 大模型视觉
 └── dist/
-    └── invoice_manager-3.6.0-py3-none-any.whl
+    └── invoice_manager-3.6.1-py3-none-any.whl
 ```
 
 ---
@@ -393,6 +393,16 @@ invoice-manager/
 - `easyofd` → OFD 电子发票格式支持
 - `psycopg2-binary` → PostgreSQL 支持
 - `paddlepaddle` + `paddleocr` → 本地离线 OCR
+
+---
+
+## 🎯 v3.6.1 新增功能
+
+| 功能 | 说明 |
+|------|------|
+| 🔑 **凭据走环境变量** | `INVOICE_BAIDU_API_KEY` / `INVOICE_BAIDU_SECRET_KEY` 等覆盖配置文件，支持 `_FILE` 变体对接 docker secrets，容器里不用把 key 写进数据卷 |
+| 👤 **容器权限零配置** | 启动时读取数据目录属主并以同一 uid/gid 运行，无需手动改权限；需要指定运行用户时用 `PUID` / `PGID` |
+| 🐳 **多架构镜像** | GitHub Actions 在推 tag 或 main 时构建 amd64 与 arm64 镜像推送到 ghcr，NAS 可直接拉取 |
 
 ---
 
