@@ -15,8 +15,14 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional
 
-from mcp.server.fastmcp import FastMCP
-from mcp.server.transport_security import TransportSecuritySettings
+try:
+    from mcp.server.fastmcp import FastMCP
+    from mcp.server.transport_security import TransportSecuritySettings
+except ModuleNotFoundError as exc:  # pragma: no cover
+    raise ModuleNotFoundError(
+        "MCP 依赖版本不兼容：本项目需要 mcp 1.x（2.x 把 FastMCP 改名为 MCPServer）。\n"
+        "请执行：pip install 'mcp>=1.27.2,<2'"
+    ) from exc
 
 from invoice_clipper import (
     load_config, init_db,

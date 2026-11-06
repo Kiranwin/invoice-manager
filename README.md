@@ -403,6 +403,7 @@ invoice-manager/
 | 🔑 **凭据走环境变量** | `INVOICE_BAIDU_API_KEY` / `INVOICE_BAIDU_SECRET_KEY` 等覆盖配置文件，支持 `_FILE` 变体对接 docker secrets，容器里不用把 key 写进数据卷 |
 | 👤 **容器权限零配置** | 启动时读取数据目录属主并以同一 uid/gid 运行，无需手动改权限；需要指定运行用户时用 `PUID` / `PGID` |
 | 🐳 **多架构镜像** | GitHub Actions 在推 tag 或 main 时构建 amd64 与 arm64 镜像推送到 ghcr，NAS 可直接拉取 |
+| 📌 **修正 mcp 依赖上限** | `mcp>=1.27.2,<2`。2.x 把 `FastMCP` 改名为 `MCPServer`，本项目用的仍是 1.x 接口；此前没写上限，`pip install .` 会装到 2.x 导致启动即 `ModuleNotFoundError` |
 
 ---
 

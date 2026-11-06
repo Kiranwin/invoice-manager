@@ -559,7 +559,7 @@ wheels = [
 
 [[package]]
 name = "invoice-manager"
-version = "3.4.1"
+version = "3.6.1"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
@@ -603,7 +603,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "invoice-manager", extras = ["ofd", "pg", "ocr"], marker = "extra == 'full'" },
     { name = "jinja2", specifier = ">=3.1.0" },
-    { name = "mcp", specifier = ">=1.27.2" },
+    { name = "mcp", specifier = ">=1.27.2,<2" },
     { name = "openpyxl", specifier = ">=3.1.0" },
     { name = "paddleocr", marker = "extra == 'ocr'", specifier = ">=2.7.0" },
     { name = "paddlepaddle", marker = "extra == 'ocr'", specifier = ">=2.6.0" },
