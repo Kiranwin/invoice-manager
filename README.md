@@ -172,6 +172,34 @@ uv run python -m invoice_clipper
 
 适合放到 NAS 或小主机上常驻，手机随时上传。
 
+### 从 ghcr 拉取（不用本地构建）
+
+仓库带了一条 GitHub Actions（`.github/workflows/docker.yml`）：推送 `v*`
+标签或更新 `main` 时自动构建 `linux/amd64` 与 `linux/arm64` 双架构镜像并推到
+GHCR，PR 只构建不推送。
+
+```bash
+docker pull ghcr.io/kiranwin/invoice-manager:latest
+```
+
+也可以用版本标签固定到某个版本，或直接拿官方镜像写 compose：
+
+```yaml
+services:
+  invoice-manager:
+    image: ghcr.io/kiranwin/invoice-manager:3.6.0
+    container_name: invoice-manager
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./data:/data
+```
+
+拉之前先建好数据目录并让 uid 1000 可写（原因见下面第三点）。
+
+### 本地构建
+
 ```bash
 mkdir -p data && sudo chown -R 1000:1000 data
 docker compose up -d --build
@@ -206,6 +234,8 @@ docker compose logs -f
 - 服务本身没有鉴权，`docker-compose.yml` 默认只映射到 `127.0.0.1`。改成
   `8000:8000` 就是局域网内任意设备可进，包括 `/mcp` 接口。不要直接暴露到公网，
   确需外网访问请在前面放一层带认证的反向代理。
+- 仓库是公开的，镜像也随之为公开；里面只有 MIT 源码，OCR 的 key 是容器
+  首次启动时生成在数据卷里的，不会被打进镜像。
 
 ---
 

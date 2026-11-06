@@ -224,6 +224,10 @@ git push origin main
 git push origin v<新版本>
 ```
 
+推送 `v*` 标签会触发 `.github/workflows/docker.yml`，自动构建 amd64 + arm64
+镜像并推送到 `ghcr.io/<owner>/invoice-manager`，标签与 git tag 同名。构建进度
+在仓库的 Actions 页面看；失败时先把日志里的架构与 pip 报错段取出来。
+
 ### 5.4 创建 GitHub Release
 
 使用 gh CLI（路径 `C:\Program Files\GitHub CLI\gh.exe`，需 `gh auth login` 认证）：
