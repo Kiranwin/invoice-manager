@@ -10,6 +10,10 @@
 # 目录权限不用管：容器启动时会读取 ./data 的属主，并以同一个 uid/gid 运行，
 # 文件写出来归你当前账号所有。确实要强制指定运行用户时，取消下面两行注释。
 # （群晖共享文件夹常见值：PUID=1026 PGID=100）
+#
+# OCR 凭据建议写在同目录的 .env 里，compose 会自动读取，不进配置文件：
+#   INVOICE_BAIDU_API_KEY=xxx
+#   INVOICE_BAIDU_SECRET_KEY=xxx
 
 services:
   invoice-manager:
@@ -23,6 +27,10 @@ services:
       - "127.0.0.1:8000:8000"
     environment:
       TZ: Asia/Shanghai
+      # 凭据也可以用环境变量直接传；用 docker secrets 时改成 _FILE 指向文件
+      # INVOICE_BAIDU_API_KEY: ""
+      # INVOICE_BAIDU_SECRET_KEY: ""
+      # INVOICE_BAIDU_API_KEY_FILE: /run/secrets/baidu_api_key
       # PUID: 1026
       # PGID: 100
     volumes:

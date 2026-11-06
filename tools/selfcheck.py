@@ -108,7 +108,34 @@ def test_amount_filter():
         check(f"非法金额 {bad!r} 应报错", False)
 
 
-# ── 3. 按分取整 ──────────────────────────────────
+# ── 3. 凭据环境变量覆盖 ──────────────────────
+def test_env_overrides():
+    import copy
+    from invoice_clipper import DEFAULT_CONFIG, apply_env_overrides
+
+    base = copy.deepcopy(DEFAULT_CONFIG)
+    base["ocr"].setdefault("baidu", {})["api_key"] = "yaml-key"
+
+    got = apply_env_overrides(copy.deepcopy(base), {"INVOICE_BAIDU_API_KEY": "env-key"})
+    check("环境变量覆盖 yaml", got["ocr"]["baidu"]["api_key"] == "env-key",
+          got["ocr"]["baidu"]["api_key"])
+
+    got = apply_env_overrides(copy.deepcopy(base), {"INVOICE_BAIDU_API_KEY": "   "})
+    check("空值不覆盖", got["ocr"]["baidu"]["api_key"] == "yaml-key",
+          got["ocr"]["baidu"]["api_key"])
+
+    tmp = Path(tempfile.mkdtemp()) / "secret.txt"
+    tmp.write_text("file-key\n", encoding="utf-8")
+    got = apply_env_overrides(copy.deepcopy(base), {"INVOICE_BAIDU_API_KEY_FILE": str(tmp)})
+    check("_FILE 变体读取", got["ocr"]["baidu"]["api_key"] == "file-key",
+          got["ocr"]["baidu"]["api_key"])
+
+    got = apply_env_overrides(copy.deepcopy(base), {"INVOICE_BAIDU_API_KEY_FILE": "/tmp/not-here"})
+    check("文件缺失时保留原值", got["ocr"]["baidu"]["api_key"] == "yaml-key",
+          got["ocr"]["baidu"]["api_key"])
+
+
+# ── 4. 按分取整 ──────────────────────────────────
 def test_cents():
     check("0.1+0.2 取分", amount_cents(0.30000000000000004) == 30)
     check("字符串金额", amount_cents("137.50") == 13750)
@@ -162,7 +189,7 @@ def test_reimbursement():
 
 
 def main():
-    for fn in (test_checks, test_amount_filter, test_cents, test_reimbursement):
+    for fn in (test_checks, test_amount_filter, test_env_overrides, test_cents, test_reimbursement):
         try:
             fn()
         except Exception as exc:  # noqa: BLE001

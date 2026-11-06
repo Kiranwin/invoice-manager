@@ -101,26 +101,28 @@ else
     echo "[entrypoint] 使用已有配置 ${CONFIG}"
 fi
 
-# 百度没收配置时，识别必然全失败。提前说一句，省得传了一批票才发现
+# 百度未配置时，识别必然全失败。这里直接看应用解析后的最终配置，
+# 所以 yaml 里的值与环境变量注入的值都能识别到。
 PYTHON_BIN="$(command -v python3 || command -v python || true)"
 if [ -n "$PYTHON_BIN" ]; then
-    if ! "$PYTHON_BIN" - "$CONFIG" <<'PY'
+    if ! "$PYTHON_BIN" - <<'PY'
 import sys
 
 try:
-    import yaml
-except ImportError:
-    # 拿不到 yaml 就不做判断，不误报
+    from invoice_clipper import load_config
+except Exception:
+    # 导不进包就不判断，不误报
     sys.exit(0)
 
-config = yaml.safe_load(open(sys.argv[1], encoding="utf-8")) or {}
+config, _ = load_config()
 baidu = ((config.get("ocr") or {}).get("baidu")) or {}
 ok = baidu.get("enabled") and baidu.get("api_key") and baidu.get("secret_key")
 sys.exit(0 if ok else 1)
 PY
     then
-        echo "[entrypoint] 提醒：百度 OCR 还没配 api_key / secret_key，现在上传发票会识别失败"
-        echo "[entrypoint] 改完 ${CONFIG} 后执行 docker compose restart"
+        echo "[entrypoint] 提醒：百度 OCR 还没有 api_key / secret_key，现在上传发票会识别失败"
+        echo "[entrypoint] 两种填法任选：写进 ${CONFIG}，或用环境变量"
+        echo "[entrypoint]   INVOICE_BAIDU_API_KEY / INVOICE_BAIDU_SECRET_KEY（可写在 .env 里）"
     fi
 fi
 

@@ -258,6 +258,43 @@ docker compose logs -f
 
 报销单默认导出到用户 `Documents/发票夹子/exports`。可在配置文件的 `storage.export_dir` 指定其他目录；收件箱中识别失败的原文件保存在 `storage.base_dir/failed_imports`，供之后重试。
 
+### 环境变量覆盖凭据
+
+OCR / 大模型的密钥不必写进配置文件：同名环境变量优先于 yaml，适合容器、CI
+或不想把 key 落盘到数据卷的场景。
+
+| 环境变量 | 对应配置项 |
+|----------|------------|
+| `INVOICE_BAIDU_API_KEY` | `ocr.baidu.api_key` |
+| `INVOICE_BAIDU_SECRET_KEY` | `ocr.baidu.secret_key` |
+| `INVOICE_LLM_API_KEY` | `ocr.llm.api_key` |
+| `INVOICE_LLM_BASE_URL` | `ocr.llm.base_url` |
+| `INVOICE_LLM_MODEL` | `ocr.llm.model` |
+
+每个变量都支持 `_FILE` 变体，值指向一个文件，读取文件内容作为值，用于
+docker secrets：
+
+```yaml
+services:
+  invoice-manager:
+    secrets:
+      - baidu_api_key
+secrets:
+  baidu_api_key:
+    file: ./secrets/baidu_api_key.txt
+```
+
+```yaml
+    environment:
+      INVOICE_BAIDU_API_KEY_FILE: /run/secrets/baidu_api_key
+```
+
+值为空的环境变量视为未设置，不会覆盖配置文件里的已有值；`_FILE` 指向的文件
+读不到时会在日志里警告并继续使用配置文件的值。
+
+注意环境变量会出现在 `docker inspect` 的输出里，能访问 docker 守护进程的人
+就能看到。一般内网自用足够，要求更严就用上面的 `_FILE` 写法。
+
 ### 识别引擎
 
 ```yaml

@@ -2,9 +2,12 @@
 发票夹子核心模块 - v3.6.0
 提供发票处理、数据库操作、导出功能的统一入口
 """
+import logging
 import os
 import yaml
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from .processor import InvoiceProcessor
 from .database import (
@@ -103,6 +106,48 @@ def deep_merge(base: dict, override: dict) -> dict:
     return result
 
 
+# ── 环境变量覆盖 ────────────────────────────────
+
+# 凭据不进配置文件：容器环境用环境变量或 docker secrets 挂文件都可以
+ENV_OVERRIDES = (
+    ("INVOICE_BAIDU_API_KEY", ("ocr", "baidu", "api_key")),
+    ("INVOICE_BAIDU_SECRET_KEY", ("ocr", "baidu", "secret_key")),
+    ("INVOICE_LLM_API_KEY", ("ocr", "llm", "api_key")),
+    ("INVOICE_LLM_BASE_URL", ("ocr", "llm", "base_url")),
+    ("INVOICE_LLM_MODEL", ("ocr", "llm", "model")),
+)
+
+
+def apply_env_overrides(config: dict, environ: dict | None = None) -> dict:
+    """用环境变量覆盖配置里的凭据类字段，返回同一个 dict。
+
+    支持两种写法，优先级从高到低：
+      INVOICE_BAIDU_API_KEY=xxx
+      INVOICE_BAIDU_API_KEY_FILE=/run/secrets/baidu_key
+    值为空字符串时视为未设置，不覆盖配置文件里的已有值。
+    """
+    env = os.environ if environ is None else environ
+    for env_name, path in ENV_OVERRIDES:
+        value = (env.get(env_name) or "").strip()
+        if not value:
+            file_path = (env.get(f"{env_name}_FILE") or "").strip()
+            if not file_path:
+                continue
+            try:
+                value = Path(file_path).read_text(encoding="utf-8").strip()
+            except OSError as exc:
+                logger.warning("读取 %s 指向的文件失败: %s", env_name, exc)
+                continue
+            if not value:
+                continue
+
+        node = config
+        for key in path[:-1]:
+            node = node.setdefault(key, {})
+        node[path[-1]] = value
+    return config
+
+
 # ── 配置加载 ──────────────────────────────────────
 
 
@@ -183,6 +228,9 @@ def load_config() -> dict:
     if not merged["storage"]["db_path"]:
         merged["storage"]["db_path"] = str(Path(root) / "data" / "invoices.db")
 
+    # 环境变量优先级高于配置文件，用于容器里注入凭据
+    apply_env_overrides(merged)
+
     return merged, loaded_path
 
 
@@ -195,6 +243,7 @@ __all__ = [
     "load_config",
     "DEFAULT_CONFIG",
     "deep_merge",
+    "apply_env_overrides",
     # 处理器
     "InvoiceProcessor",
     # 数据库核心
