@@ -196,7 +196,7 @@ services:
       - ./data:/data
 ```
 
-拉之前先建好数据目录，并按需设置 `PUID` / `PGID`（默认 1000，见下面第一点）。
+拉之前建一下数据目录即可，不需要改权限（见下面第一点）。
 
 ### 本地构建
 
@@ -206,9 +206,9 @@ docker compose up -d --build
 docker compose logs -f
 ```
 
-`./data` 的属主是多少，就在 `.env` 或环境里把 `PUID` / `PGID` 填成多少（查：
-`stat -c '%u:%g' data`，群晖常见是 `1026:100`）。容器启动时会自动对齐，
-不需要 `sudo` 改目录权限。不设默认 1000，与大多数桌面 Linux 的第一个用户一致。
+`./data` 的属主不用管：容器启动时会读它的 uid/gid，以同一个身份运行，写出来的
+文件归你当前账号。确实需要强制运行用户时，在 `.env` 里设 `PUID` / `PGID`
+（查目录属主：`stat -c '%u:%g' data`，群晖常见 `1026:100`）。
 
 浏览器打开 `http://localhost:8000`。首次启动会在 `./data/config.yaml` 生成配置，
 填入 OCR 的 API Key 后 `docker compose restart` 即生效。
@@ -227,10 +227,10 @@ docker compose logs -f
 
 三点须知：
 
-- 容器以 `PUID`/`PGID` 指定的用户运行，默认 `1000:1000`。如果宿主机目录属主
-  不是它，容器启动时会自动改属主；想避开这件事就在 compose 里把两个值写成
-  目录的真实属主。写 `PUID=0` 则以 root 运行，容器内风险变大，且写出的文件在
-  宿主机上属主为 root，后续用普通账号整理会被拒。
+- 目录权限默认不需要管：容器读取 `./data` 的属主并以同一 uid/gid 运行，
+  空目录（root 新建、属主 0）会回退到 `1000:1000` 并把目录改归属主。只有想
+  强制指定运行用户时才设 `PUID`/`PGID`；写 `PUID=0` 则以 root 运行，容器内
+  风险变大，且写出的文件在宿主机上属主为 root，后续用普通账号整理会被拒。
 - 镜像只装核心依赖，**不含本地 PaddleOCR**。容器默认只启用百度 OCR（首次生成的
   配置里 `baidu.enabled: true`，填上 key 重启即可用）。本地 OCR 依赖未安装，
   就算把 `text_ocr.enabled` 改成 true 也不会生效；大模型视觉只需要 httpx，

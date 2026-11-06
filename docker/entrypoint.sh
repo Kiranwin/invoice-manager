@@ -4,10 +4,21 @@ set -e
 
 CONFIG="${INVOICE_MANAGER_CONFIG:-/data/config.yaml}"
 DATA_DIR="$(dirname "$CONFIG")"
-PUID="${PUID:-1000}"
-PGID="${PGID:-1000}"
 
 mkdir -p "$DATA_DIR"
+
+# 未指定 PUID/PGID 时，直接跟随数据目录的现有属主，也就是"不管它也能跑"。
+# 目录是刚用 root 建出来的空目录（属主 0）时，回退到 1000，与镜像里的 app 用户一致。
+if [ -z "${PUID:-}" ] || [ -z "${PGID:-}" ]; then
+    owner_uid="$(stat -c %u "$DATA_DIR")"
+    owner_gid="$(stat -c %g "$DATA_DIR")"
+    if [ "$owner_uid" = "0" ]; then
+        owner_uid=1000
+        owner_gid=1000
+    fi
+    PUID="${PUID:-$owner_uid}"
+    PGID="${PGID:-$owner_gid}"
+fi
 
 # 以 root 启动时，先把运行用户改成 PUID/PGID，再用同一脚本重入一次。
 # 重入后 id -u 不再为 0，会直接走下面的配置生成与启动，所有文件也都是
