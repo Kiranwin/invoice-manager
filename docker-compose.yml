@@ -1,12 +1,16 @@
 # 发票夹子 Docker Compose
 #
 # 首次使用：
-#   mkdir -p data && sudo chown -R 1000:1000 data
+#   mkdir -p data
 #   docker compose up -d --build
 #   docker compose logs -f
 #
 # 数据全部落在 ./data：config.yaml、invoices.db、invoices/、exports/、failed_imports/
 # 迁移或备份时整目录拷走即可。
+#
+# 目录权限：把 PUID/PGID 填成 ./data 的属主即可，容器启动时会自动对齐，
+# 不用 sudo 改权限。查属主：stat -c '%u:%g' data
+# 群晖常见的值：PUID=1026 PGID=100
 
 services:
   invoice-manager:
@@ -20,5 +24,7 @@ services:
       - "127.0.0.1:8000:8000"
     environment:
       TZ: Asia/Shanghai
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
     volumes:
       - ./data:/data

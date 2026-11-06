@@ -1,16 +1,38 @@
 #!/bin/sh
-# 容器入口：首次启动生成 /data/config.yaml，之后每次启动都直接复用
+# 容器入口：按 PUID/PGID 降权、首次启动生成 /data/config.yaml
 set -e
 
 CONFIG="${INVOICE_MANAGER_CONFIG:-/data/config.yaml}"
 DATA_DIR="$(dirname "$CONFIG")"
+PUID="${PUID:-1000}"
+PGID="${PGID:-1000}"
 
 mkdir -p "$DATA_DIR"
 
-# 宿主机挂载目录的属主不是容器内的 uid 1000 时会写不进去，这里提前说清楚
+# 以 root 启动时，先把运行用户改成 PUID/PGID，再用同一脚本重入一次。
+# 重入后 id -u 不再为 0，会直接走下面的配置生成与启动，所有文件也都是
+# 目标用户建的，不会在宿主机上变成 root 所有。
+if [ "$(id -u)" = "0" ]; then
+    if [ "$PUID" != "0" ]; then
+        if [ "$(id -g app)" != "$PGID" ]; then
+            groupmod -o -g "$PGID" app
+        fi
+        if [ "$(id -u app)" != "$PUID" ]; then
+            usermod -o -u "$PUID" app
+        fi
+        # 属主不一致时才递归改，避免每次启动都扫一遍整个数据卷
+        if [ "$(stat -c %u "$DATA_DIR")" != "$PUID" ] || [ "$(stat -c %g "$DATA_DIR")" != "$PGID" ]; then
+            echo "[entrypoint] 调整数据目录属主为 ${PUID}:${PGID}"
+            chown -R "$PUID:$PGID" "$DATA_DIR"
+        fi
+        exec gosu app "$0" "$@"
+    fi
+    echo "[entrypoint] PUID=0，以 root 运行，写出的文件在宿主机上属主为 root"
+fi
+
 if [ ! -w "$DATA_DIR" ]; then
     echo "[entrypoint] 数据目录不可写：${DATA_DIR}" >&2
-    echo "[entrypoint] 在宿主机执行：sudo chown -R 1000:1000 <挂载目录>" >&2
+    echo "[entrypoint] 在 compose 里设置 PUID/PGID 为宿主机目录的属主，或调整目录权限" >&2
     exit 1
 fi
 

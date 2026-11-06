@@ -18,8 +18,9 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 # 时区数据用于本地时间显示；PyMuPDF 自带 wheel，不需要额外的系统库
+# gosu 用于容器启动后从 root 降权到 PUID/PGID 指定的用户
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends tzdata \
+    && apt-get install -y --no-install-recommends tzdata gosu \
     && rm -rf /var/lib/apt/lists/*
 
 # 先拷元数据与包源码再安装，改代码时能复用依赖层缓存
@@ -33,7 +34,8 @@ RUN chmod 0755 /usr/local/bin/entrypoint.sh \
     && mkdir -p /data \
     && chown -R app:app /app /data
 
-USER app
+# 不写 USER：以 root 启动，由 entrypoint 按 PUID/PGID 降权。
+# 想直接以 root 跑完整流程，设 PUID=0 即可（不推荐，写出的文件属主会是 root）
 VOLUME ["/data"]
 EXPOSE 8000
 
