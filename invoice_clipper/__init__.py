@@ -1,7 +1,9 @@
 """
-发票夹子核心模块 - v3.6.1
+发票夹子核心模块 - v3.6.2
 提供发票处理、数据库操作、导出功能的统一入口
 """
+__version__ = "3.6.2"
+
 import logging
 import os
 import yaml
@@ -39,7 +41,7 @@ from .database import (
     get_invoices_by_ids,
     get_all_invoice_tags,
 )
-from .db_backends import DatabaseBackend, SQLiteBackend, PostgreSQLBackend
+from .db_backends import DatabaseBackend, SQLiteBackend
 from .exporter import export_excel, export_merged_pdf, build_export_label, export_zip_sources, export_bundle, resolve_export_dir
 from .matcher import find_best_match, find_multiple_candidates
 from .file_utils import (
@@ -253,7 +255,7 @@ __all__ = [
     "update_invoice", "get_invoice_by_id", "get_all_invoices",
     "is_duplicate", "exists_by_invoice_number",
     # 后端类
-    "DatabaseBackend", "SQLiteBackend", "PostgreSQLBackend",
+    "DatabaseBackend", "SQLiteBackend",
     # 归属管理
     "get_projects", "add_project", "delete_project",
     "get_persons", "add_person", "delete_person",

@@ -1,12 +1,12 @@
 """
 发票数据库模块 — 调度层
 
-通过全局 _backend 实例将操作委托给实际的后端实现（SQLite / PostgreSQL）。
+通过全局 _backend 实例将操作委托给本地 SQLite 后端。
 对外函数签名与 v2.0 保持兼容。
 """
 import logging
 from typing import Optional, List
-from .db_backends import SQLiteBackend, PostgreSQLBackend, DatabaseBackend
+from .db_backends import SQLiteBackend, DatabaseBackend
 
 logger = logging.getLogger(__name__)
 
@@ -30,12 +30,10 @@ def set_backend(config: dict) -> DatabaseBackend:
     global _backend
     storage = config if isinstance(config, dict) and "db_type" in config else config.get("storage", config)
     db_type = storage.get("db_type", "sqlite")
-    if db_type == "postgresql":
-        _backend = PostgreSQLBackend(config)
-        logger.info("数据库后端: PostgreSQL")
-    else:
-        _backend = SQLiteBackend(config)
-        logger.info("数据库后端: SQLite")
+    if db_type != "sqlite":
+        raise ValueError("仅支持本地 SQLite 数据库：storage.db_type 必须为 sqlite")
+    _backend = SQLiteBackend(config)
+    logger.info("数据库后端: SQLite")
     return _backend
 
 
@@ -44,9 +42,8 @@ def _signature(db_path_or_config) -> str:
     if isinstance(db_path_or_config, str):
         return f"sqlite:{db_path_or_config}"
     storage = (db_path_or_config or {}).get("storage", db_path_or_config or {})
-    if storage.get("db_type") == "postgresql":
-        keys = ("pg_host", "pg_port", "pg_database", "pg_user")
-        return "pg:" + ":".join(str(storage.get(k, "")) for k in keys)
+    if storage.get("db_type") != "sqlite":
+        raise ValueError("仅支持本地 SQLite 数据库：storage.db_type 必须为 sqlite")
     return f"sqlite:{storage.get('db_path', '')}"
 
 

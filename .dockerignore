@@ -10,9 +10,12 @@ __pycache__
 dist
 build
 *.egg-info
+*.log
+.python-version
 data
 *.db
 .claude
 AGENTS.md
 tools
 docker-compose.yml
+uv.lock

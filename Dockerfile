@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 #
 # 发票夹子容器镜像
-#   - 只装核心依赖（不含 ofd / pg / ocr 可选组），体积约 300MB
+#   - 只装核心依赖（不含 ofd / ocr 可选组），使用 slim 基础镜像
 #   - 非 root 运行，唯一持久化目录 /data
 #   - 首次启动自动生成 /data/config.yaml
 #
@@ -21,12 +21,13 @@ WORKDIR /app
 # gosu 用于容器启动后从 root 降权到 PUID/PGID 指定的用户
 RUN apt-get update \
     && apt-get install -y --no-install-recommends tzdata gosu \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /tmp/* /var/tmp/*
 
 # 先拷元数据与包源码再安装，改代码时能复用依赖层缓存
 COPY pyproject.toml README.md ./
 COPY invoice_clipper ./invoice_clipper
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir --no-compile .
 
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod 0755 /usr/local/bin/entrypoint.sh \

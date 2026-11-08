@@ -2,7 +2,7 @@
   <img src="https://img.shields.io/badge/Python-3.12+-blue.svg" alt="Python 3.12+">
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License">
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg" alt="Platform">
-  <img src="https://img.shields.io/badge/Version-3.6.1-brightgreen.svg" alt="v3.6.1">
+  <img src="https://img.shields.io/badge/Version-3.6.2-brightgreen.svg" alt="v3.6.2">
 </p>
 
 <h1 align="center">发票夹子 🧾</h1>
@@ -10,7 +10,7 @@
 <p align="center">
   <strong>轻量级发票识别与管理工具</strong><br>
   本地优先 · 三级引擎降级 · 标签系统 · 智能凑票 · 一键导出<br>
-  支持 SQLite / PostgreSQL · Web UI + MCP 双入口
+  本地 SQLite · Web UI + MCP 双入口
 </p>
 
 ---
@@ -27,7 +27,7 @@
 | 🎯 **智能凑票** | 给定目标金额，自动找出最优发票组合 |
 | 📊 **灵活导出** | 选择指定发票，合并PDF/源文件ZIP/附件打包 |
 | ↩️ **报销单可修正** | 财务退回后移出发票、重算金额、重新生成文件，已报销发票可退回 |
-| 🗄️ **双数据库** | SQLite（默认）或 PostgreSQL，配置即切 |
+| 🗄️ **本地数据库** | SQLite 文件数据库，随数据目录一起备份和迁移 |
 
 ---
 
@@ -37,7 +37,7 @@
 
 ```bash
 # 从 Wheel 包安装
-pip install dist/invoice_manager-3.6.1-py3-none-any.whl
+pip install dist/invoice_manager-3.6.2-py3-none-any.whl
 ```
 
 ### 启动 Web UI
@@ -147,7 +147,7 @@ MCP Server 暴露以下 23 个工具，覆盖发票管理全流程：
 ### Wheel 包（推荐）
 
 ```bash
-pip install dist/invoice_manager-3.6.1-py3-none-any.whl
+pip install dist/invoice_manager-3.6.2-py3-none-any.whl
 ```
 
 安装后可用命令：
@@ -187,7 +187,7 @@ docker pull ghcr.io/kiranwin/invoice-manager:latest
 ```yaml
 services:
   invoice-manager:
-    image: ghcr.io/kiranwin/invoice-manager:3.6.1
+    image: ghcr.io/kiranwin/invoice-manager:3.6.2
     container_name: invoice-manager
     restart: unless-stopped
     ports:
@@ -342,10 +342,10 @@ invoice-manager/
 │   ├── __init__.py               # load_config + 所有模块导出
 │   ├── __main__.py               # pip 入口点
 │   ├── __run__.py                # 进程锁启动入口（支持 --debug）
-│   ├── web.py                    # FastAPI Web UI (v3.6.1)
+│   ├── web.py                    # FastAPI Web UI (v3.6.2)
 │   ├── mcp_server.py             # MCP AI Agent 接口
 │   ├── database.py               # 数据库调度层
-│   ├── db_backends.py            # SQLite + PostgreSQL 后端
+│   ├── db_backends.py            # 本地 SQLite 后端
 │   ├── processor.py              # 发票处理主流程
 │   ├── workflow.py               # 状态、报销单与失败导入业务操作
 │   ├── exporter.py               # Excel / PDF / ZIP 导出
@@ -370,7 +370,7 @@ invoice-manager/
 │       ├── baidu_ocr.py          # 百度 OCR
 │       └── llm_vision.py         # 大模型视觉
 └── dist/
-    └── invoice_manager-3.6.1-py3-none-any.whl
+    └── invoice_manager-3.6.2-py3-none-any.whl
 ```
 
 ---
@@ -391,8 +391,17 @@ invoice-manager/
 
 可选依赖：
 - `easyofd` → OFD 电子发票格式支持
-- `psycopg2-binary` → PostgreSQL 支持
 - `paddlepaddle` + `paddleocr` → 本地离线 OCR
+
+---
+
+## 🎯 v3.6.2 新增功能
+
+| 功能 | 说明 |
+|------|------|
+| 🗄️ **仅保留 SQLite** | 移除 PostgreSQL 后端与可选依赖，`storage.db_type` 只接受 `sqlite`，避免误配置到不支持的后端 |
+| 🐳 **镜像瘦身** | 精化构建上下文，清理 apt 缓存与 Python bytecode；基础镜像仍为 Python slim，只安装核心依赖 |
+| 🚀 **Docker 文档补齐** | 明确 GitHub Actions 双架构构建、GHCR 标签、数据目录备份和权限处理方式 |
 
 ---
 

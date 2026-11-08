@@ -31,7 +31,7 @@ class InvoiceProcessor:
         # 确保目录存在
         self.archive_dir.mkdir(parents=True, exist_ok=True)
 
-        # 初始化数据库（传完整配置，支持 SQLite / PostgreSQL）
+        # 初始化数据库（传完整配置，仅支持 SQLite）
         init_db(self.cfg)
 
         # 初始化识别引擎（按优先级排序）
