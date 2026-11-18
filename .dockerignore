@@ -18,4 +18,3 @@ data
 AGENTS.md
 tools
 docker-compose.yml
-uv.lock
