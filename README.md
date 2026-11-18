@@ -2,7 +2,7 @@
   <img src="https://img.shields.io/badge/Python-3.12+-blue.svg" alt="Python 3.12+">
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License">
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg" alt="Platform">
-  <img src="https://img.shields.io/badge/Version-3.6.2-brightgreen.svg" alt="v3.6.2">
+  <img src="https://img.shields.io/badge/Version-3.6.3-brightgreen.svg" alt="v3.6.3">
 </p>
 
 <h1 align="center">发票夹子 🧾</h1>
@@ -37,7 +37,7 @@
 
 ```bash
 # 从 Wheel 包安装
-pip install dist/invoice_manager-3.6.2-py3-none-any.whl
+pip install dist/invoice_manager-3.6.3-py3-none-any.whl
 ```
 
 ### 启动 Web UI
@@ -147,7 +147,7 @@ MCP Server 暴露以下 23 个工具，覆盖发票管理全流程：
 ### Wheel 包（推荐）
 
 ```bash
-pip install dist/invoice_manager-3.6.2-py3-none-any.whl
+pip install dist/invoice_manager-3.6.3-py3-none-any.whl
 ```
 
 安装后可用命令：
@@ -187,7 +187,7 @@ docker pull ghcr.io/kiranwin/invoice-manager:latest
 ```yaml
 services:
   invoice-manager:
-    image: ghcr.io/kiranwin/invoice-manager:3.6.2
+    image: ghcr.io/kiranwin/invoice-manager:3.6.3
     container_name: invoice-manager
     restart: unless-stopped
     ports:
@@ -346,7 +346,7 @@ invoice-manager/
 │   ├── __init__.py               # load_config + 所有模块导出
 │   ├── __main__.py               # pip 入口点
 │   ├── __run__.py                # 进程锁启动入口（支持 --debug）
-│   ├── web.py                    # FastAPI Web UI (v3.6.2)
+│   ├── web.py                    # FastAPI Web UI (v3.6.3)
 │   ├── mcp_server.py             # MCP AI Agent 接口
 │   ├── database.py               # 数据库调度层
 │   ├── db_backends.py            # 本地 SQLite 后端
@@ -374,7 +374,7 @@ invoice-manager/
 │       ├── baidu_ocr.py          # 百度 OCR
 │       └── llm_vision.py         # 大模型视觉
 └── dist/
-    └── invoice_manager-3.6.2-py3-none-any.whl
+    └── invoice_manager-3.6.3-py3-none-any.whl
 ```
 
 ---
@@ -396,6 +396,18 @@ invoice-manager/
 可选依赖：
 - `easyofd` → OFD 电子发票格式支持
 - `paddlepaddle` + `paddleocr` → 本地离线 OCR
+
+---
+
+## 🎯 v3.6.3 修复内容
+
+| 问题 | 说明 |
+|------|------|
+| 🗂️ **票据档案上传无效** | 发票详情页的编辑表单把整个侧栏也包了进去，附件上传表单与附件删除按钮都变成「表单套表单」。按 HTML 规范内层 `<form>` 会被解析器直接丢弃，点「上传」实际提交的是外层编辑表单，于是只提示「保存成功」，附件从未入库。现在编辑表单只包住主栏，侧栏的表单独立存在 |
+| 🔔 **提示对不上事实** | 上传结果按真实入库数量回话：没选到文件时提示「没有收到可上传的文件」，成功时提示「已上传 N 个附件」并定位到票据档案区 |
+| 🖼️ **中文文件名附件打不开** | 附件预览/下载接口把中文名直接写进 `Content-Disposition`，而 HTTP 头只能承载 latin-1，响应头编码失败直接 500，图片变碎图标、PDF 打不开。改为 ASCII 回退名 + RFC 5987 的 `filename*` |
+| 🔗 **提示文案被截断** | flash 提示的查询串改用 `urlencode`，文案里带 `&`、`#` 不再被拆断 |
+| 🧪 **回归自检补位** | `tools/selfcheck.py` 新增模板表单嵌套扫描，任何模板出现表单套表单都会报错并指出行号 |
 
 ---
 

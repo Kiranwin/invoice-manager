@@ -8,8 +8,11 @@
 - 发票字段自检（checks.invoice_issues）
 - 金额筛选解析（web.parse_amount_filter）
 - 金额按分取整（workflow.amount_cents）
+- 模板表单嵌套（form 套 form 会被浏览器丢弃，整块上传失效）
+- 附件响应头编码（中文文件名不能让 Content-Disposition 报 500）
 - 报销单增删与合计重算（在临时库上跑，不碰真实数据）
 """
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -108,7 +111,61 @@ def test_amount_filter():
         check(f"非法金额 {bad!r} 应报错", False)
 
 
-# ── 3. 凭据环境变量覆盖 ──────────────────────
+# ── 3. 模板表单嵌套 ──────────────────────────
+FORM_TAG_RE = re.compile(r"<form\b[^>]*>|</form\s*>", re.I)
+
+
+def scan_form_nesting(text: str) -> tuple[int, int]:
+    """返回 (结束时的 form 深度, 首个嵌套位置行号)，行号 0 表示没有嵌套。
+
+    HTML 解析器不允许 form 套 form：内层 <form> 会被直接丢弃，里面的
+    input 归到外层表单。edit.html 的附件上传就因此整块失效，见 v3.6.3。
+    """
+    depth = 0
+    nested_line = 0
+    for tag in FORM_TAG_RE.finditer(text):
+        if tag.group(0).startswith("</"):
+            depth -= 1
+        else:
+            depth += 1
+            if depth > 1 and not nested_line:
+                nested_line = text.count("\n", 0, tag.start()) + 1
+    return depth, nested_line
+
+
+def test_templates():
+    for path in sorted((Path(__file__).resolve().parent.parent
+                        / "invoice_clipper" / "templates").glob("*.html")):
+        depth, nested_line = scan_form_nesting(path.read_text(encoding="utf-8"))
+        check(f"{path.name} 无嵌套表单", nested_line == 0, f"第 {nested_line} 行多了一个 <form>")
+        check(f"{path.name} form 标签配对", depth == 0, f"结束时深度 {depth}")
+
+
+# ── 4. 附件响应头 ───────────────────────────
+
+
+def test_attachment_disposition():
+    from invoice_clipper.web import build_inline_disposition
+
+    names = ["tiny.png", "收据.jpg", 'a"b.png', "发票 2026/11 月.pdf", "emoji🧾.png"]
+    for name in names:
+        try:
+            header = build_inline_disposition(name, "attachment-1.png")
+            header.encode("latin-1")
+            ok = True
+        except UnicodeEncodeError:
+            ok = False
+            header = ""
+        check(f"附件头可编码 {name!r}", ok, header)
+        check(f"附件头带 filename* {name!r}", "filename*=UTF-8''" in header, header)
+        check(f"附件头是 inline {name!r}", header.startswith("inline;"), header)
+
+    # 回退名全为非 ASCII 时不能退化成只剩扩展名
+    header = build_inline_disposition("收据.jpg", "附件.jpg")
+    check("回退名全非 ASCII 有兵底", 'filename="attachment' in header, header)
+
+
+# ── 5. 凭据环境变量覆盖 ──────────────────────
 def test_env_overrides():
     import copy
     from invoice_clipper import DEFAULT_CONFIG, apply_env_overrides
@@ -189,7 +246,9 @@ def test_reimbursement():
 
 
 def main():
-    for fn in (test_checks, test_amount_filter, test_env_overrides, test_cents, test_reimbursement):
+    for fn in (test_checks, test_amount_filter, test_templates,
+               test_attachment_disposition, test_env_overrides,
+               test_cents, test_reimbursement):
         try:
             fn()
         except Exception as exc:  # noqa: BLE001

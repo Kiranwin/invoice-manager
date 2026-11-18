@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""发票夹子 Web UI — FastAPI + Jinja2 (v3.6.2)"""
+"""发票夹子 Web UI — FastAPI + Jinja2 (v3.6.3)"""
 import json
 import logging
 import re
 import shutil
 import webbrowser
 from decimal import InvalidOperation
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from pathlib import Path
 from datetime import datetime
 
@@ -83,7 +83,7 @@ async def _lifespan(app: FastAPI):
         yield  # 应用运行中
 
 
-app = FastAPI(title="发票夹子", version="3.6.2", lifespan=_lifespan)
+app = FastAPI(title="发票夹子", version="3.6.3", lifespan=_lifespan)
 app.mount("/static", StaticFiles(directory=str(PKG_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(PKG_DIR / "templates"))
 
@@ -92,9 +92,13 @@ app.mount("/mcp", mcp_server.streamable_http_app())
 
 
 # ── Helpers ───────────────────────────────────────
-def flash_redirect(url: str, message: str, msg_type: str = "success") -> RedirectResponse:
+def flash_redirect(url: str, message: str, msg_type: str = "success",
+                   anchor: str = "") -> RedirectResponse:
+    """带 flash 提示的跳转。查询串统一 urlencode，提示里带 & 或 # 也不会被截断。"""
     sep = "&" if "?" in url else "?"
-    return RedirectResponse(f"{url}{sep}message={message}&msg_type={msg_type}", status_code=303)
+    query = urlencode({"message": message, "msg_type": msg_type})
+    frag = f"#{anchor}" if anchor else ""
+    return RedirectResponse(f"{url}{sep}{query}{frag}", status_code=303)
 
 
 def get_flash(request: Request) -> dict:
@@ -163,6 +167,28 @@ def parse_amount_filter(raw: str) -> tuple[int | None, int | None]:
 # ── Attachment serving ───────────────────────────
 
 
+def build_inline_disposition(display_name: str, fallback_name: str) -> str:
+    """拼 Content-Disposition 头值：ASCII 回退名 + RFC 5987 的 filename*。
+
+    HTTP 头只能承载 latin-1，中文文件名直接放进 filename="..." 会让响应头
+    编码失败直接 500（图片变碎图标、PDF 打不开）。所以回退名只用 ASCII，
+    真实文件名走 filename*，浏览器优先采用后者。
+    """
+    safe_fallback = "".join(
+        ch for ch in fallback_name if ch.isascii() and ch not in '"\\'
+    )
+    stem, sep, ext_part = safe_fallback.rpartition(".")
+    if sep:
+        ext = "." + ext_part
+    else:
+        stem, ext = safe_fallback, ""
+    if not re.sub(r"[\W_]+", "", stem):
+        stem = "attachment"
+    safe_fallback = f"{stem}{ext}" or "attachment.bin"
+    return (f'inline; filename="{safe_fallback}"; '
+            f"filename*=UTF-8''{quote(display_name, safe='')}")
+
+
 @app.get("/attachments/{att_id}/file")
 def serve_attachment(att_id: int):
     """Serve attached image/pdf file by attachment ID"""
@@ -190,10 +216,12 @@ def serve_attachment(att_id: int):
         ".pdf": "application/pdf",
         ".txt": "text/plain",
     }.get(ext, "application/octet-stream")
-    # inline 让浏览器直接显示图片，而非下载
-    disposition = f'inline; filename="{att.get("original_name") or filepath.name}"'
+    # inline 让浏览器直接显示图片，而非下载。
+    display_name = att.get("original_name") or filepath.name
+    fallback = f"attachment-{att_id}{filepath.suffix or '.bin'}"
     return FileResponse(filepath, media_type=media_type,
-                        headers={"Content-Disposition": disposition})
+                        headers={"Content-Disposition":
+                                 build_inline_disposition(display_name, fallback)})
 
 
 # ── Routes ────────────────────────────────────────
@@ -748,7 +776,12 @@ async def upload_attachments(request: Request, inv_id: int,
         seq += 1
         count += 1
 
-    return flash_redirect(f"/list/{inv_id}", f"上传 {count} 个附件")
+    if not count:
+        return flash_redirect(f"/list/{inv_id}",
+                              "没有收到可上传的文件，请重新选择", "warning",
+                              anchor="archive")
+    return flash_redirect(f"/list/{inv_id}", f"已上传 {count} 个附件，见右侧票据档案",
+                          anchor="archive")
 
 
 @app.post("/list/{inv_id}/attachments/{att_id}/delete")
@@ -760,7 +793,7 @@ def delete_attachment_route(request: Request, inv_id: int, att_id: int):
         if p.exists():
             p.unlink()
         delete_attachment(att_id)
-    return flash_redirect(f"/list/{inv_id}", "附件已删除")
+    return flash_redirect(f"/list/{inv_id}", "附件已删除", anchor="archive")
 
 
 # ── 导出辅助 ──────────────────────────────────
@@ -1192,7 +1225,7 @@ def main():
     port = int(cfg.get("server", {}).get("port", 8000))
 
     url = f"http://{host}:{port}"
-    print("发票夹子 v3.6.2 正在启动 ...")
+    print("发票夹子 v3.6.3 正在启动 ...")
     print(f"   配置文件: {cfg_path}")
     print(f"   本地地址: {url}")
 
